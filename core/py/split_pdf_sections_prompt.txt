@@ -1,0 +1,17 @@
+Write one commented and downloadable Python script. Code comments and prompt/prints must be in English. Assume the input PDF is always indexed (has TOC): if not the script must end with a working message.
+Input: path_pdf_completo, path_output.
+Logic:
+1. Create output folder: PDF name (Windows-safe, max 80 chars). Copy original PDF there with complete report.txt file containing the console output of whole extracting process.
+2. Create sections/ subfolder. For each recursive TOC item, create a folder named: [id]_[section#]_[title] (Windows-safe, max 80 chars).
+3. Extract content using page Y-coordinates:
+	• If leaf: from section title start to next section title start (excluded).
+	• If non-leaf: from section title start to first child section title start (excluded).
+4. Save extracted content as PDF (same name as its folder) inside its specific folder. Trim everything before/after.
+5. In each section folder, generate a report.txt logging extraction anomalies.
+6. In the output folder named after the PDF (where the original is copied), alongside the global report.txt, also write toc.yaml: the TOC as a nested tree. Each node has:
+    id: the progressive number used in its folder name
+    number: the section number as in the TOC
+    title: the section title
+    page_start: the first page
+    page_end: the last page
+    sections: its child nodes, nested

@@ -1,0 +1,653 @@
+#!/usr/bin/env python3
+"""
+extract_toc_sections.py
+=======================
+Split a PDF into one PDF per TOC (bookmark) entry, using page Y coordinates.
+
+Output layout
+-------------
+<output_path>/<pdf_name>/
+    <original>.pdf                      <- copy of the source PDF
+    sections/
+        001_1_Introduction/
+            001_1_Introduction.pdf      <- ONLY the content of that section
+            report.txt                  <- extraction log / anomalies
+        002_1.1_Overview/
+            ...
+
+Extraction rules
+----------------
+* Leaf section      : from the start of its title up to (excluding) the start of
+                      the next TOC entry.
+* Non-leaf section  : from the start of its title up to (excluding) the start of
+                      its first child section.
+  In both cases the end boundary is simply "the next TOC entry in document order".
+* Everything before the title and after the end boundary is physically removed
+  from the page content (redaction), not just hidden.
+* Repeating page headers/footers are detected and removed as well
+  (set STRIP_HEADERS_FOOTERS = False to keep them).
+
+Requires: pip install pymupdf
+"""
+
+import os
+import re
+import shutil
+import sys
+from collections import Counter
+from dataclasses import dataclass, field
+from pathlib import Path
+
+try:
+    import pymupdf as fitz  # modern import name
+except ImportError:  # older PyMuPDF releases
+    import fitz
+
+# ----------------------------------------------------------------------------
+# Configuration
+# ----------------------------------------------------------------------------
+
+MAX_NAME_LEN = 80              # max length of folder / file names
+STRIP_HEADERS_FOOTERS = True   # remove running headers/footers from the output
+TRIM_PAGES = True              # crop output pages to the extracted content only
+HF_BAND = 0.12                 # fraction of page height searched for headers/footers
+HF_MIN_RATIO = 0.25            # a header/footer must repeat on >= 25% of pages
+HF_PAD = 3.0                   # extra points removed below header / above footer
+EPS = 0.01                     # tiny offset (pt) used for cut lines
+TOP_TOL = 3.0                  # a title this close to the content top = "top of page"
+MAX_PATH_LEN = 255             # warn if a Windows path gets longer than this
+
+WIN_RESERVED = {"CON", "PRN", "AUX", "NUL",
+                *(f"COM{i}" for i in range(1, 10)),
+                *(f"LPT{i}" for i in range(1, 10))}
+
+# "3.2.1 Title", "3. Title", "A.2 Title"  ->  (number, title)
+NUMBER_RE = re.compile(r"^\s*(\d+(?:\.\d+)*|[A-Z]\.\d+(?:\.\d+)*)\.?\s+(\S.*)$")
+
+
+# ----------------------------------------------------------------------------
+# Data structures
+# ----------------------------------------------------------------------------
+
+@dataclass
+class Node:
+    """One TOC entry."""
+    idx: int                    # position in the (filtered) TOC, 0-based
+    level: int                  # TOC depth (1 = top level)
+    raw_title: str              # title exactly as stored in the TOC
+    title: str                  # title without the leading section number
+    number: str                 # section number (from the title or computed)
+    number_source: str          # "title" or "computed"
+    page: int                   # 0-based start page
+    dest_y: float | None        # Y stored in the bookmark (may be missing/wrong)
+    is_leaf: bool = True
+    # filled in by locate_heading():
+    y: float = 0.0              # top of the heading line
+    method: str = ""            # how the heading position was found
+    start_cut: float = 0.0      # cut line just above the heading
+    end_cut: float = 0.0        # cut line to use when this heading ENDS the previous section
+    tight_spacing: bool = False # previous text line overlaps the heading's box
+
+    @property
+    def pos(self):
+        return (self.page, self.y)
+
+
+# ----------------------------------------------------------------------------
+# File-name helpers
+# ----------------------------------------------------------------------------
+
+def win_safe(text: str, max_len: int = MAX_NAME_LEN) -> str:
+    """Return a Windows-safe file/folder name of at most `max_len` characters."""
+    text = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", text)   # forbidden characters
+    text = re.sub(r"\s+", "_", text.strip())             # whitespace -> underscore
+    text = text.rstrip(". _")                            # no trailing dot/space
+    if text.split(".")[0].upper() in WIN_RESERVED:       # reserved device names
+        text = "_" + text
+    text = text[:max_len].rstrip(". _")
+    return text or "untitled"
+
+
+def section_folder_name(progressive: str, number: str, title: str) -> str:
+    """[progressive]_[section_number]_[section_title], Windows-safe, <= 80 chars."""
+    prefix = f"{progressive}_{win_safe(number, 20)}_"
+    room = max(MAX_NAME_LEN - len(prefix), 1)
+    return win_safe(prefix + win_safe(title, room), MAX_NAME_LEN)
+
+
+def norm(text: str) -> str:
+    """Normalise text for fuzzy comparisons (letters/digits only, casefolded)."""
+    return re.sub(r"[\W_]+", "", text.casefold())
+
+
+# ----------------------------------------------------------------------------
+# Interactive prompts
+# ----------------------------------------------------------------------------
+
+def clean_path(raw: str) -> str:
+    """Strip whitespace, quotes and shell escapes added by drag-and-drop in terminals."""
+    s = raw.strip().strip('"').strip("'")
+    if os.name != "nt":                      # macOS/Linux: "My\ File.pdf" -> "My File.pdf"
+        s = re.sub(r"\\(?=[ ()&'\[\]])", "", s)
+    return s
+
+
+def ask_pdf_path() -> Path:
+    while True:
+        p = Path(clean_path(input("Enter the path of the complete PDF file: "))).expanduser()
+        if p.is_file() and p.suffix.lower() == ".pdf":
+            return p
+        print(f"  -> File not found or not a .pdf: {p.resolve()}")
+        print(f"     (current directory: {Path.cwd()}). Please try again.")
+
+
+def ask_output_path() -> Path:
+    while True:
+        raw = clean_path(input("Enter the output directory path: "))
+        if not raw:
+            continue
+        p = Path(raw).expanduser()
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+            return p
+        except OSError as exc:
+            print(f"  -> Cannot use this directory ({exc}). Please try again.")
+
+
+def confirm(question: str) -> bool:
+    return input(f"{question} [y/N]: ").strip().lower() in ("y", "yes")
+
+
+# ----------------------------------------------------------------------------
+# TOC parsing
+# ----------------------------------------------------------------------------
+
+def read_toc(doc):
+    """Read the recursive TOC (bookmarks) and return a list of Node objects."""
+    raw, skipped = [], []
+    for level, title, page, dest in doc.get_toc(simple=False):
+        title = re.sub(r"\s+", " ", title).strip()
+        if page < 1 or page > len(doc):
+            skipped.append(title)           # unresolved / external bookmark
+            continue
+        dest_y = None
+        if isinstance(dest, dict) and dest.get("to") is not None:
+            y = float(dest["to"].y)
+            if y == y and y > 0:            # not NaN and not 0 ("unknown")
+                dest_y = y
+        raw.append((level, title, page - 1, dest_y))
+
+    nodes, counters = [], []
+    for i, (level, title, page, dest_y) in enumerate(raw):
+        # computed hierarchical number (used when the title has none)
+        counters = counters[:level]
+        counters += [0] * (level - len(counters))
+        counters[level - 1] += 1
+        computed = ".".join(str(c or 1) for c in counters)
+
+        m = NUMBER_RE.match(title)
+        if m:
+            number, clean_title, source = m.group(1), m.group(2), "title"
+        else:
+            number, clean_title, source = computed, title, "computed"
+
+        nodes.append(Node(i, level, title, clean_title, number, source, page, dest_y))
+
+    # a node is a leaf when the next entry is not deeper than itself
+    for i, n in enumerate(nodes):
+        n.is_leaf = not (i + 1 < len(nodes) and nodes[i + 1].level > n.level)
+    return nodes, skipped
+
+
+# ----------------------------------------------------------------------------
+# Text-line cache and header/footer detection
+# ----------------------------------------------------------------------------
+
+class LineCache:
+    """Per-page cache of text lines: (text, max_font_size, Rect)."""
+
+    def __init__(self, doc):
+        self.doc, self._cache = doc, {}
+
+    def lines(self, pno):
+        if pno not in self._cache:
+            out = []
+            for b in self.doc[pno].get_text("dict")["blocks"]:
+                if b.get("type") != 0:
+                    continue
+                for ln in b["lines"]:
+                    spans = [s for s in ln["spans"] if s["text"].strip()]
+                    if spans:
+                        out.append(("".join(s["text"] for s in spans),
+                                    max(s["size"] for s in spans),
+                                    fitz.Rect(ln["bbox"])))
+            self._cache[pno] = out
+        return self._cache[pno]
+
+
+def detect_headers_footers(doc):
+    """Find repeating headers/footers.
+    Returns (header_bottom, footer_top, rects_by_page):
+      header_bottom : Y below which the body starts (0 = no header found)
+      footer_top    : Y above which the body ends   (None = no footer found)
+      rects_by_page : {page_index: [Rect, ...]} of the detected header/footer text
+    """
+    n = len(doc)
+    per_page, counter = [], Counter()
+    for page in doc:
+        h = page.rect.height
+        items = []
+        for b in page.get_text("blocks"):
+            if b[6] != 0:
+                continue
+            key = re.sub(r"\s+", " ", re.sub(r"\d+", "#", b[4].lower())).strip()
+            if not key:
+                continue
+            pos = "top" if b[3] <= h * HF_BAND else "bot" if b[1] >= h * (1 - HF_BAND) else None
+            if pos:
+                items.append((pos, key, fitz.Rect(b[:4])))
+        per_page.append(items)
+        for k in {(p, key) for p, key, _ in items}:
+            counter[k] += 1
+
+    thr = max(3, int(n * HF_MIN_RATIO))
+    rects = {p: [r for pos, key, r in items if counter[(pos, key)] >= thr]
+             for p, items in enumerate(per_page)}
+    header_bottom = max((r.y1 for rs in rects.values() for r in rs
+                         if r.y1 <= doc[0].rect.height * HF_BAND), default=0.0)
+    footer_top = min((r.y0 for rs in rects.values() for r in rs
+                      if r.y0 >= doc[0].rect.height * (1 - HF_BAND)), default=None)
+
+    # repeating vector rules/logos inside the bands (e.g. the line under a header)
+    gcount, gitems = Counter(), []
+    for page in doc:
+        h, seen = page.rect.height, set()
+        for d in page.get_drawings():
+            r = d["rect"]
+            if r.height > h * 0.05:
+                continue
+            pos = ("top" if r.y1 <= h * (HF_BAND + 0.05)
+                   else "bot" if r.y0 >= h * (1 - HF_BAND - 0.05) else None)
+            key = (pos, round(r.y0), round(r.y1), round(r.width / 10))
+            if pos and key not in seen:
+                seen.add(key)
+                gcount[key] += 1
+                gitems.append((key, r))
+    for key, r in gitems:
+        if gcount[key] >= thr:
+            if key[0] == "top":
+                header_bottom = max(header_bottom, r.y1)
+            else:
+                footer_top = r.y0 if footer_top is None else min(footer_top, r.y0)
+
+    if header_bottom:
+        header_bottom += HF_PAD
+    if footer_top is not None:
+        footer_top -= HF_PAD
+    return header_bottom, footer_top, rects
+
+
+# ----------------------------------------------------------------------------
+# Locating headings (Y coordinates)
+# ----------------------------------------------------------------------------
+
+def content_bottom_before(cache, pno, y, skip):
+    """Bottom (y1) of the lowest body text line that starts above Y."""
+    best = None
+    for _, _, r in cache.lines(pno):
+        if r.y0 < y - 0.5 and not any(r.intersects(s) for s in skip):
+            best = r.y1 if best is None else max(best, r.y1)
+    return best
+
+
+def locate_heading(doc, cache, node, hf_rects):
+    """Find the real top Y of the heading line on its page and compute cut lines."""
+    page = doc[node.page]
+    skip = hf_rects.get(node.page, [])
+    visible = lambda r: not any(r.intersects(s) for s in skip)   # ignore running headers
+    queries = list(dict.fromkeys(q for q in (node.raw_title, node.title) if q))
+
+    # 1) exact text search on the destination page
+    cands, method = [], ""
+    for q in queries:
+        try:
+            hits = page.search_for(q)
+        except Exception:
+            hits = []
+        cands = [h for h in hits if visible(h)]
+        if cands:
+            method = "text search"
+            break
+
+    # 2) fuzzy line match (handles odd spacing / ligatures / wrapped titles)
+    if not cands:
+        targets = {norm(q) for q in queries if norm(q)}
+        for text, _, r in cache.lines(node.page):
+            nl = norm(text)
+            if nl and visible(r):
+                for t in targets:
+                    if t == nl or (len(nl) >= max(6, len(t) // 2) and t.startswith(nl)) \
+                            or (len(t) >= 6 and nl.startswith(t)):
+                        cands.append(r)
+                        break
+        if cands:
+            method = "line match"
+
+    if cands:
+        def font_size(rect):
+            return max((s for _, s, r in cache.lines(node.page) if r.intersects(rect)),
+                       default=0)
+        if node.dest_y:   # several matches: pick the one closest to the bookmark
+            rect = min(cands, key=lambda r: abs(r.y0 - node.dest_y))
+        else:             # no hint: prefer the biggest font, then the topmost
+            rect = min(cands, key=lambda r: (-font_size(r), r.y0))
+    elif node.dest_y:
+        rect = fitz.Rect(0, node.dest_y, page.rect.width, node.dest_y + 1)
+        method = "bookmark destination (title text NOT found)"
+    else:
+        rect = fitz.Rect(0, 0, page.rect.width, 1)
+        method = "top of page (no position information)"
+
+    node.y, node.method = rect.y0, method
+    node.start_cut = rect.y0 - EPS          # keep the heading, drop what is above
+    prev = content_bottom_before(cache, node.page, rect.y0, skip)
+    if prev is None or prev < rect.y0 - 2 * EPS:
+        node.end_cut = rect.y0 - EPS        # normal case: cut right above the heading
+    else:                                    # previous line's box overlaps the heading:
+        node.end_cut = prev + EPS            # cut below it so no section text is lost
+        node.tight_spacing = True
+
+
+# ----------------------------------------------------------------------------
+# Extraction
+# ----------------------------------------------------------------------------
+
+def redact(page, rect):
+    """Physically remove text / graphics / image pixels inside `rect`."""
+    if rect.is_empty or rect.height < 0.5:
+        return
+    page.add_redact_annot(rect, fill=(1, 1, 1))
+    kwargs = {"images": getattr(fitz, "PDF_REDACT_IMAGE_PIXELS", 2)}
+    gfx = getattr(fitz, "PDF_REDACT_LINE_ART_REMOVE_IF_COVERED", None)
+    if gfx is not None:
+        kwargs["graphics"] = gfx
+    try:
+        page.apply_redactions(**kwargs)
+    except TypeError:                        # very old PyMuPDF
+        page.apply_redactions(images=kwargs["images"])
+
+
+def find_end(nodes, i):
+    """Return (end_node, notes). End boundary = next TOC entry in document order
+    (for a non-leaf this is its first child; for a leaf the next section)."""
+    n, notes = nodes[i], []
+    cand = nodes[i + 1] if i + 1 < len(nodes) else None
+    if cand is not None and cand.pos < n.pos:
+        later = [m for m in nodes if m.pos > n.pos]
+        cand = min(later, key=lambda m: m.pos) if later else None
+        notes.append("TOC order is inconsistent with page order; the end boundary "
+                     "was taken from the next entry by position instead.")
+    return cand, notes
+
+
+def extract_section(doc, nodes, i, hdr_bottom, ftr_top, out_pdf):
+    """Build the PDF of section nodes[i]. Returns a dict with details/anomalies."""
+    n = nodes[i]
+    info = {"warnings": [], "notes": [], "pages": None, "empty": False}
+    nxt, notes = find_end(nodes, i)
+    info["warnings"] += notes
+    info["next"] = nxt
+
+    s = n.page
+    start_top = max(hdr_bottom, n.start_cut)          # first-page top cut
+    if nxt is None:
+        e, end_cut = len(doc) - 1, None
+        info["notes"].append("Last TOC entry: extracted up to the end of the document "
+                             "(any back matter such as an index is included).")
+    elif nxt.y <= hdr_bottom + TOP_TOL and nxt.page > s:
+        e, end_cut = nxt.page - 1, None               # next title is at the very top of its page
+    else:
+        e, end_cut = nxt.page, nxt.end_cut
+
+    if e < s or (e == s and end_cut is not None and end_cut - start_top < 1):
+        info["empty"] = True
+        info["warnings"].append("Empty extent: the next TOC entry starts at (or before) "
+                                "this heading. No PDF created.")
+        return info
+
+    out = fitz.open()
+    out.insert_pdf(doc, from_page=s, to_page=e, annots=False)
+    last = len(out) - 1
+    for k, page in enumerate(out):
+        h, w = page.rect.height, page.rect.width
+        top = hdr_bottom if STRIP_HEADERS_FOOTERS else 0.0
+        bottom = ftr_top if (STRIP_HEADERS_FOOTERS and ftr_top is not None) else h
+        if k == 0:
+            top = max(top, n.start_cut)
+        if k == last and end_cut is not None:
+            bottom = min(bottom, end_cut)
+        if bottom - top < 5:
+            info["warnings"].append(f"Output page {k + 1} (source page {s + k + 1}) "
+                                    "has no content left after cutting.")
+            continue
+        redact(page, fitz.Rect(0, 0, w, top))
+        redact(page, fitz.Rect(0, bottom, w, h))
+        if page.rotation:
+            info["warnings"].append(f"Source page {s + k + 1} is rotated "
+                                    f"({page.rotation} deg): verify the cut manually.")
+        elif TRIM_PAGES:
+            page.set_cropbox(fitz.Rect(0, top, w, bottom))
+
+    # drop internal links pointing to pages that are not in this file
+    for page in out:
+        for lk in page.get_links():
+            if lk.get("kind") == fitz.LINK_GOTO and not (0 <= lk.get("page", -1) < len(out)):
+                page.delete_link(lk)
+
+    out.set_metadata({"title": n.raw_title})
+    out.set_toc([[1, n.raw_title[:200], 1]])
+    out.save(out_pdf, garbage=4, deflate=True, clean=True)
+    out.close()
+    info["pages"] = (s + 1, e + 1)
+    return info
+
+
+def verify_output(out_pdf, n, nxt, info):
+    """Re-open the saved PDF and look for extraction anomalies."""
+    d = fitz.open(out_pdf)
+    texts = [p.get_text() for p in d]
+    d.close()
+    all_norm = [norm(t) for t in texts]
+    total_chars = sum(len(t) for t in all_norm)
+    info["chars"] = total_chars
+    if total_chars == 0:
+        info["warnings"].append("No text found in the output PDF (scanned/image-only page?).")
+        return
+
+    # the first thing on the first page must be the heading itself
+    first = all_norm[0]
+    variants = [norm(n.raw_title), norm(n.title), norm(n.number + n.title)]
+    if not any(v and first.startswith(v) for v in variants):
+        info["warnings"].append("The first page does not start with the section title: "
+                                "text before the heading may remain, or the heading "
+                                "was matched at the wrong place.")
+
+    # the next section's heading must not appear in the output
+    if nxt is not None:
+        for v in {norm(nxt.raw_title), norm(nxt.title)}:
+            if len(v) >= 6 and v in all_norm[-1]:
+                info["warnings"].append(
+                    f"The next section title ('{nxt.raw_title}') still appears on the "
+                    "last page: it may be a cross-reference, or the end cut failed.")
+                break
+
+
+# ----------------------------------------------------------------------------
+# Report
+# ----------------------------------------------------------------------------
+
+def write_report(path, n, info, hdr_bottom, ftr_top, out_name):
+    nxt = info.get("next")
+    warnings = list(info["warnings"])
+    if n.method.startswith(("bookmark", "top of page")):
+        warnings.append(f"Heading position fallback used: {n.method}.")
+    if n.number_source == "computed":
+        info["notes"].append("The TOC title has no section number; the number in the "
+                             "folder name was computed from the TOC hierarchy.")
+    if n.tight_spacing:
+        info["notes"].append("Tight line spacing at the heading: the cut line was moved "
+                             "below the previous text line to avoid losing section text.")
+
+    lines = [
+        f"Section report: {n.raw_title}",
+        "=" * 70,
+        f"Output file       : {out_name}" if info["pages"] else "Output file       : (none created)",
+        f"TOC level         : {n.level}",
+        f"Section number    : {n.number} ({n.number_source})",
+        f"Type              : {'leaf' if n.is_leaf else 'non-leaf (stops at first child)'}",
+        f"Start             : source page {n.page + 1}, Y = {n.y:.1f} pt  [{n.method}]",
+        "End (excluded)    : " +
+        (f"'{nxt.raw_title}' at source page {nxt.page + 1}, Y = {nxt.y:.1f} pt  [{nxt.method}]"
+         if nxt else "end of document"),
+        f"Source pages      : {info['pages'][0]}-{info['pages'][1]}" if info["pages"] else "Source pages      : -",
+        f"Characters output : {info.get('chars', 0)}",
+        f"Header/footer cut : "
+        + (f"header up to Y={hdr_bottom:.0f}, " if STRIP_HEADERS_FOOTERS and hdr_bottom else "no header, ")
+        + (f"footer from Y={ftr_top:.0f}" if STRIP_HEADERS_FOOTERS and ftr_top is not None else "no footer")
+        + ("" if STRIP_HEADERS_FOOTERS else " (stripping disabled)"),
+        "",
+        f"ANOMALIES ({len(warnings)})",
+        "-" * 70,
+    ]
+    lines += [f"[WARN] {w}" for w in warnings] or ["None detected."]
+    if info["notes"]:
+        lines += ["", "NOTES", "-" * 70] + [f"[INFO] {x}" for x in info["notes"]]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return len(warnings)
+
+
+# ----------------------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------------------
+
+def main():
+    # Prompts (command-line arguments, if given, skip the prompts)
+    pdf_path = None
+    if len(sys.argv) > 1:
+        pdf_path = Path(clean_path(sys.argv[1])).expanduser()
+        if not (pdf_path.is_file() and pdf_path.suffix.lower() == ".pdf"):
+            print(f"PDF not found: {pdf_path.resolve()}")
+            print(f"(relative paths are resolved from: {Path.cwd()})")
+            pdf_path = None
+    if pdf_path is None:
+        pdf_path = ask_pdf_path()
+    out_base = (Path(clean_path(sys.argv[2])).expanduser()
+                if len(sys.argv) > 2 else ask_output_path())
+    # Open the PDF and check the TOC BEFORE creating anything on disk
+    doc = fitz.open(pdf_path)
+    if doc.needs_pass:
+        sys.exit("The PDF is password protected. Nothing was created.")
+    nodes, skipped = read_toc(doc)
+    if not nodes:
+        sys.exit("This PDF has no usable TOC (bookmarks), so there are no sections "
+                 "to extract. Nothing was created.")
+    out_base.mkdir(parents=True, exist_ok=True)
+
+    # 1. Output folder named after the PDF, with a copy of the original inside
+    root = out_base / win_safe(pdf_path.stem)
+    root.mkdir(exist_ok=True)
+    try:
+        shutil.copy2(pdf_path, root / pdf_path.name)
+    except shutil.SameFileError:
+        pass
+
+    # 2. sections/ sub-folder
+    sections_dir = root / "sections"
+    if sections_dir.exists() and any(sections_dir.iterdir()):
+        if not confirm(f"'{sections_dir}' is not empty. Delete its content and continue?"):
+            sys.exit("Aborted.")
+        shutil.rmtree(sections_dir)
+    sections_dir.mkdir(exist_ok=True)
+
+    print(f"{pdf_path.name}: {len(doc)} pages, {len(nodes)} TOC entries")
+    for t in skipped:
+        print(f"  [skipped] TOC entry without a valid page: {t}")
+
+    # header/footer detection + exact heading positions
+    hdr_bottom, ftr_top, hf_rects = (detect_headers_footers(doc)
+                                     if STRIP_HEADERS_FOOTERS else (0.0, None, {}))
+    cache = LineCache(doc)
+    for n in nodes:
+        locate_heading(doc, cache, n, hf_rects)
+
+    # 3-5. Extract every section, verify it and write its report
+    width = max(3, len(str(len(nodes))))
+    flagged = 0
+    summary_lines = []   # same lines shown in the terminal, saved to <root>/report.txt
+    records = []   # one entry per TOC node, used to build toc.yaml
+    for i, n in enumerate(nodes):
+        folder = sections_dir / section_folder_name(str(i + 1).zfill(width), n.number, n.title)
+        folder.mkdir(exist_ok=True)
+        pdf_out = folder / f"{folder.name}.pdf"
+        if len(str(pdf_out)) > MAX_PATH_LEN:
+            print(f"  [warning] path longer than {MAX_PATH_LEN} chars (Windows limit): {pdf_out}")
+        try:
+            info = extract_section(doc, nodes, i, hdr_bottom, ftr_top, pdf_out)
+            records.append({"level": n.level, "id": str(i + 1).zfill(width),
+                            "number": n.number, "title": n.title,
+                            "page_start": info["pages"][0] if info["pages"] else None,
+                            "page_end": info["pages"][1] if info["pages"] else None})            
+            if info["pages"]:
+                verify_output(pdf_out, n, info["next"], info)
+        except Exception as exc:    # never stop the whole run for one bad section
+            info = {"warnings": [f"Extraction failed: {exc!r}"], "notes": [],
+                    "pages": None, "next": None}
+        n_warn = write_report(folder / "report.txt", n, info, hdr_bottom, ftr_top, pdf_out.name)
+        flagged += bool(n_warn)
+        status = f"{n_warn} warning(s)" if n_warn else "ok"
+        line = f"  {folder.name:<80} {status}"
+        print(line)
+        summary_lines.append(line)
+
+    final = (f"\nDone: {len(nodes)} sections in '{sections_dir}'. "
+             f"{flagged} section(s) with anomalies (see their report.txt).")
+    print(final)
+    summary_lines.append(final)
+    # global report next to the copy of the original PDF
+    (root / "report.txt").write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
+    write_toc_yaml(root / "toc.yaml", records)
+
+
+def write_toc_yaml(path, records):
+    """Write the TOC as a nested YAML tree (no external dependency)."""
+    def q(s):  # double-quoted YAML string (keeps "0001" and "1.10" as text)
+        return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
+    def num(v):
+        return "null" if v is None else str(v)
+
+    root, stack = [], []                      # stack holds (level, children_list)
+    for r in records:
+        r = dict(r, children=[])
+        while stack and stack[-1][0] >= r["level"]:
+            stack.pop()
+        (stack[-1][1] if stack else root).append(r)
+        stack.append((r["level"], r["children"]))
+
+    lines = []
+    def emit(items, indent):
+        pad = " " * indent
+        for r in items:
+            lines.append(f'{pad}- id: {q(r["id"])}')
+            lines.append(f'{pad}  number: {q(r["number"])}')
+            lines.append(f'{pad}  title: {q(r["title"])}')
+            lines.append(f'{pad}  page_start: {num(r["page_start"])}')
+            lines.append(f'{pad}  page_end: {num(r["page_end"])}')
+            if r["children"]:
+                lines.append(f'{pad}  sections:')
+                emit(r["children"], indent + 4)
+    emit(root, 0)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+if __name__ == "__main__":
+    main()

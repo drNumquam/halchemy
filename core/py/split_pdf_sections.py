@@ -596,7 +596,8 @@ def main():
             records.append({"level": n.level, "id": str(i + 1).zfill(width),
                             "number": n.number, "title": n.title,
                             "page_start": info["pages"][0] if info["pages"] else None,
-                            "page_end": info["pages"][1] if info["pages"] else None})            
+                            "page_end": info["pages"][1] if info["pages"] else None,
+                            "file": pdf_out.relative_to(root).as_posix() if info["pages"] else None})         
             if info["pages"]:
                 verify_output(pdf_out, n, info["next"], info)
         except Exception as exc:    # never stop the whole run for one bad section
@@ -642,6 +643,8 @@ def write_toc_yaml(path, records):
             lines.append(f'{pad}  title: {q(r["title"])}')
             lines.append(f'{pad}  page_start: {num(r["page_start"])}')
             lines.append(f'{pad}  page_end: {num(r["page_end"])}')
+            if r["file"]:                                                    # <-- NUOVA
+                lines.append(f'{pad}  content: !include {q(r["file"])}')     # <-- NUOVA
             if r["children"]:
                 lines.append(f'{pad}  sections:')
                 emit(r["children"], indent + 4)

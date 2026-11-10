@@ -1,0 +1,78 @@
+$schema: "https://json-schema.org"
+title: "Microcontroller Memory Region Configuration Schema"
+type: "object"
+required:
+  - "memory_region"
+
+properties:
+  memory_region:
+    type: "object"
+    required:
+      - "name"
+      - "description"
+      - "base_address"
+      - "size_bytes"
+      - "access"
+      - "alignment_bytes"
+      - "power_loss_retention"
+      - "dma_accessible"
+      - "cores_shared"
+    additionalProperties: false
+    
+    properties:
+      name:
+        type: "string"
+        minLength: 1
+        
+      description:
+        type: "string"
+        
+      base_address:
+        type: "integer"
+        minimum: 0
+        
+      size_bytes:
+        type: "integer"
+        minimum: 1
+        
+      access:
+        type: "string"
+        enum: ["R", "W", "X", "RW", "RX", "WX", "RWX", "-"]
+        
+      alignment_bytes:
+        type: "integer"
+        minimum: 1
+        default: 1
+        
+      power_loss_retention:
+        type: "boolean"
+        
+      dma_accessible:
+        type: "boolean"
+        
+      cores_shared:
+        type: "boolean"
+        
+      array:
+        type: "array"
+        items:
+          type: "object"
+          required:
+            - "index"
+            - "range"
+            - "stride_bytes"
+          additionalProperties: false
+          properties:
+            index:
+              type: "string"
+              minLength: 1
+            range:
+              type: "array"
+              minItems: 2
+              maxItems: 2
+              items:
+                type: "integer"
+                minimum: 0
+            stride_bytes:
+              type: "integer"
+              minimum: 1

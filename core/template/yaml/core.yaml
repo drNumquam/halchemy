@@ -1,0 +1,12 @@
+core:
+  name: "" # Core name shall be unique within the MCU description.
+  description: ""
+  registers:
+    - id: "" # Core-wide register block identifier
+      keywords: [""] # Search tags or categories
+      yaml: "" # Path to the corresponding .yaml file
+  memory_regions:
+    - id: "" # Core-wide memory region identifier
+      keywords: [""] # Search tags or categories
+      yaml: "" # Path to the corresponding .yaml file
+

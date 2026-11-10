@@ -1,0 +1,11 @@
+peripheral:
+  name: "" # Peripheral name shall be unique within the MCU description.
+  description: ""
+  registers:
+    - id: "" # Peripheral-wide register block identifier
+      keywords: [""] # Search tags or categories
+      yaml: "" # Path to the corresponding .yaml file
+  memory_regions:
+    - id: "" # Peripheral-wide memory region identifier
+      keywords: [""] # Search tags or categories
+      yaml: "" # Path to the corresponding .yaml file

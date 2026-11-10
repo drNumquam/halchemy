@@ -1,0 +1,33 @@
+register:
+  name: "USART_CR{0}"
+  description: "Control Register {0} for serial interface configuration"
+  type: "M"
+  base_address: 0x40011000
+  size_bits: 32
+  access: "RW"
+  value_at_reset: 0x00000000
+  array:
+    - index: "reg_idx"
+      range: [1, 2] # Generates USART_CR1 and USART_CR2
+      stride_bytes: 4
+  bitfields:
+    - name: "UE"
+      description: "USART Enable bit"
+      bits: [0, 0]
+      access: "RW"
+      value_at_reset: 0
+      enum:
+        - value: 0
+          description: "USART prescaler and outputs disabled"
+        - value: 1
+          description: "USART enabled"
+    - name: "M"
+      description: "Word length selection"
+      bits: [12, 12]
+      access: "RW"
+      value_at_reset: 0
+      enum:
+        - value: 0
+          description: "1 Start bit, 8 Data bits, n Stop bit"
+        - value: 1
+          description: "1 Start bit, 9 Data bits, n Stop bit"

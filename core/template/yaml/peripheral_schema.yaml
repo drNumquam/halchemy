@@ -1,0 +1,57 @@
+$schema: "https://json-schema.org"
+title: "Microcontroller Peripheral Configuration Schema"
+type: "object"
+required:
+  - "peripheral"
+
+properties:
+  peripheral:
+    type: "object"
+    required:
+      - "name"
+      - "description"
+      - "registers"
+      - "memory_regions"
+    additionalProperties: false
+    
+    properties:
+      name:
+        type: "string"
+        minLength: 1
+        
+      description:
+        type: "string"
+        
+      registers:
+        type: "array"
+        minItems: 1
+        items:
+          $ref: "#/$defs/peripheral_component_item"
+          
+      memory_regions:
+        type: "array"
+        minItems: 1
+        items:
+          $ref: "#/$defs/peripheral_component_item"
+
+$defs:
+  peripheral_component_item:
+    type: "object"
+    required:
+      - "id"
+      - "keywords"
+      - "yaml"
+    additionalProperties: false
+    properties:
+      id:
+        type: "string"
+        minLength: 1
+      keywords:
+        type: "array"
+        uniqueItems: true
+        items:
+          type: "string"
+          minLength: 1
+      yaml:
+        type: "string"
+        minLength: 1

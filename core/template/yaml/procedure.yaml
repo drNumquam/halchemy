@@ -1,0 +1,7 @@
+procedure:
+  name: "" # Procedure name shall be unique within the MCU description.
+  description: ""
+  rules:
+    - id: "" # rule block identifier
+      keywords: [""] # Search tags or categories
+      yaml: "" # Path to the corresponding .yaml file

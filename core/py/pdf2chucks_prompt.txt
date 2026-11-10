@@ -1,5 +1,50 @@
-Write one commented and downloadable Python script. Code comments and prompt/prints must be in English. Assume the input PDF is always indexed (has TOC): if not the script must end with a working message.
-Input: path_pdf_completo, path_output.
+Write one commented and downloadable Python script. Code comments and prompt/prints must be in English. 
+Assume the input PDF is always indexed (has TOC): if not the script must end with a working message.
+Syntax: python pdf2chucks.py  <pdf> -o <output_folder>
+
+Example:
+\output_folder
+    toc.yaml
+    \sections
+         <cnt>_<section_number>.pdf
+         ....
+         
+Example output:
+toc.yaml
+=========================================
+source: xxxxx.pdf
+pages: 1277
+
+sections:
+        -id: <cnt>
+         level: 1
+         number: "section_number"
+         title: "::::::"
+         start_page:
+         end_page:
+         start_y:
+         end_y:
+         pdf:  "pdf_section_relative_path"
+         keywords: 
+              - "a.."
+              - "b.."
+         children:
+              -id:
+               level: 2
+               number: 
+               title: ":::"
+               start_page:
+               end_page:
+               start_y:
+               end_y:
+               pdf: 
+               keywords:
+                  - "" 
+                  - ""
+               children: []
+            
+              -id: 
+
 Logic:
 1. Create output folder: PDF name (Windows-safe, max 80 chars). Copy original PDF there with complete report.txt file containing the console output of whole extracting process.
 2. Create sections/ subfolder. For each recursive TOC item, create a folder named: [id]_[section#]_[title] (Windows-safe, max 80 chars).

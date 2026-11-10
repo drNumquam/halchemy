@@ -1,0 +1,13 @@
+rule:
+  id: "" # Unique identifier
+  trigger: # Action or event that starts the rule
+    - ""
+  requires: # Conditions that must be true before the action is allowed
+    - ""
+  completion: # Conditions that indicate successful completion
+    - ""
+  timeout: "" # Max duration (e.g., "100 us", "10 ms", "1 s", "none", "unknown")
+  error: # Conditions indicating failure
+    - ""
+  result: # Expected outcome after successful completion
+    - ""

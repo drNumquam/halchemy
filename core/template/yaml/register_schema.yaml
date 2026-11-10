@@ -1,0 +1,112 @@
+$schema: "https://json-schema.org"
+title: "Microcontroller Register Configuration Schema"
+type: "object"
+required:
+  - "register"
+
+properties:
+  register:
+    type: "object"
+    required:
+      - "name"
+      - "description"
+      - "type"
+      - "size_bits"
+    additionalProperties: false
+    
+    properties:
+      name:
+        type: "string"
+        minLength: 1
+      description:
+        type: "string"
+      type:
+        type: "string"
+        enum: ["M", "S"]
+      access_instr:
+        type: "object"
+        required: ["read", "write"]
+        additionalProperties: false
+        properties:
+          read:
+            type: "string"
+          write:
+            type: "string"
+      base_address:
+        type: "integer"
+        minimum: 0
+      size_bits:
+        type: "integer"
+        minimum: 1
+      access:
+        type: "string"
+        enum: ["R", "W", "RW", "RS", "RC", "WS", "WC", "-"]
+      value_at_reset:
+        type: "integer"
+        minimum: 0
+      array:
+        type: "array"
+        items:
+          type: "object"
+          required: ["index", "range", "stride_bytes"]
+          additionalProperties: false
+          properties:
+            index:
+              type: "string"
+              minLength: 1
+            range:
+              type: "array"
+              minItems: 2
+              maxItems: 2
+              items:
+                type: "integer"
+                minimum: 0
+            stride_bytes:
+              type: "integer"
+              minimum: 1
+      enum:
+        type: "array"
+        items:
+          $ref: "#/$defs/enum_item"
+      bitfields:
+        type: "array"
+        items:
+          type: "object"
+          required: ["name", "description", "bits", "access", "value_at_reset"]
+          additionalProperties: false
+          properties:
+            name:
+              type: "string"
+              minLength: 1
+            description:
+              type: "string"
+            bits:
+              type: "array"
+              minItems: 2
+              maxItems: 2
+              items:
+                type: "integer"
+                minimum: 0
+            access:
+              type: "string"
+              enum: ["R", "W", "RW", "RS", "RC", "WS", "WC", "-"]
+            value_at_reset:
+              type: "integer"
+              minimum: 0
+            enum:
+              type: "array"
+              items:
+                $ref: "#/$defs/enum_item"
+
+$defs:
+  enum_item:
+    type: "object"
+    required: ["value", "description"]
+    additionalProperties: false
+    properties:
+      value:
+        type: "integer"
+        minimum: 0
+      description:
+        type: "string"
+        minLength: 1

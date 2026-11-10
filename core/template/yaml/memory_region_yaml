@@ -1,0 +1,14 @@
+memory_region:
+  name: "" # Unique name. Use placeholders like {0} if it's an array (e.g., RAM_{0})
+  description: "" # Short description
+  base_address: 0 # Integer start address (aligned)
+  size_bytes: 0 # Integer size > 0
+  access: "" # Allowed: R, W, X, RW, RX, WX, RWX, -
+  alignment_bytes: 1 # Address alignment constraint, default 1
+  power_loss_retention: false # true or false
+  dma_accessible: false # true or false
+  cores_shared: false # true or false
+  array: # Optional list. Add one item per placeholder ({0}, {1}) used in name
+    - index: "" # Loop index name
+      range: [0, 0] # [start_index, end_index]
+      stride_bytes: 0 # Address increment between instances

@@ -1,0 +1,27 @@
+register:
+  name: "" # Unique name. Use {0}, {1} for arrays (e.g., CH{0}_CTRL)
+  description: "" # Always use double quotes
+  type: "" # "M" (Memory mapped) or "S" (Special/System register)
+  access_instr: # Optional/Required based on type
+    read: ""
+    write: ""
+  base_address: 0 # Integer base address
+  size_bits: 32 # Register size in bits
+  access: "" # R, W, RW, RS, RC, WS, WC, - (Used if no bitfields)
+  value_at_reset: 0 # Register-level reset value
+  array: # Optional list for array generation
+    - index: ""
+      range: [0, 0] # [start_index, end_index]
+      stride_bytes: 0
+  enum: # Optional at register-level if no bitfields are defined
+    - value: 0
+      description: ""
+  bitfields: # Optional list of bitfields
+    - name: ""
+      description: ""
+      bits: [0, 0] # [lsb, msb] (both limits inclusive)
+      access: "" # R, W, RW, RS, RC, WS, WC, -
+      value_at_reset: 0
+      enum:
+        - value: 0
+          description: ""

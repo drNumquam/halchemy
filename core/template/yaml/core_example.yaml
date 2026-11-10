@@ -1,0 +1,26 @@
+core:
+  name: "cortex_m4_core_0"
+  description: "Main processor core execution unit"
+  registers:
+    - id: "NVIC"
+      keywords:
+        - "interrupts"
+        - "nested_vector"
+      yaml: "cores/registers/NVIC.yaml"
+    - id: "DWT"
+      keywords:
+        - "debug"
+        - "trace"
+        - "watchpoint"
+      yaml: "cores/registers/DWT.yaml"
+  memory_regions:
+    - id: "ITCM_RAM"
+      keywords:
+        - "instruction_tcm"
+        - "fast_execution"
+      yaml: "cores/memory_regions/ITCM.yaml"
+    - id: "DTCM_RAM"
+      keywords:
+        - "data_tcm"
+        - "local_memory"
+      yaml: "cores/memory_regions/DTCM.yaml"

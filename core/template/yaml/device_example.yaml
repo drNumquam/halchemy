@@ -1,0 +1,54 @@
+device:
+  name: "STM32F401RE"
+  description: "High-performance foundation line, ARM Cortex-M4 core with DSP and FPU, 512 Kbytes Flash, 84 MHz CPU"
+  architecture: "ARM Cortex-M4"
+  word_size: 32
+  endianness: "LE" # Little-Endian
+
+  globals:
+    registers:
+      - id: "SCB"
+        keywords:
+          - "system_control"
+          - "core_peripherals"
+        yaml: "globals/registers/SCB.yaml"
+
+    memory_regions:
+      - id: "FLASH"
+        keywords:
+          - "main_memory"
+          - "non_volatile"
+        yaml: "globals/memory_regions/FLASH.yaml"
+        
+      - id: "SRAM"
+        keywords:
+          - "volatile"
+          - "data_memory"
+        yaml: "globals/memory_regions/SRAM.yaml"
+
+  cores:
+    - id: "Core0"
+      keywords:
+        - "primary_core"
+        - "cortex_m4"
+      yaml: "cores/Core0.yaml"
+
+    - id: "Core1"
+      keywords:
+        - "secondary_core"
+        - "cortex_m4"
+      yaml: "cores/Core1.yaml"
+
+  peripherals:
+    - id: "GPIOA"
+      keywords:
+        - "gpio"
+        - "port_a"
+      yaml: "peripherals/GPIOA.yaml"
+
+    - id: "USART2"
+      keywords:
+        - "serial"
+        - "uart"
+        - "communication"
+      yaml: "peripherals/USART2.yaml"

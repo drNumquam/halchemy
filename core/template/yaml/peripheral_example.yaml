@@ -1,0 +1,16 @@
+peripheral:
+  name: "USART1"
+  description: "Universal Synchronous Asynchronous Receiver Transmitter"
+  registers:
+    - id: "USART1_REGS"
+      keywords:
+        - "serial"
+        - "communication"
+        - "uart"
+      yaml: "peripherals/registers/USART1_REGS.yaml"
+  memory_regions:
+    - id: "USART1_MMIO"
+      keywords:
+        - "peripheral_memory"
+        - "io_mapped"
+      yaml: "peripherals/memory_regions/USART1_MMIO.yaml"

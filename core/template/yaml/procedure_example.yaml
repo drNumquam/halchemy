@@ -1,0 +1,15 @@
+procedure:
+  name: "ADC_INITIALIZATION_PROC"
+  description: "Sequence to safely enable ADC and trigger the first DMA burst transfer"
+  rules:
+    - id: "ADC_POWER_ON_RULE"
+      keywords:
+        - "power"
+        - "init"
+      yaml: "rules/adc_power_on.yaml"
+    - id: "ADC_DMA_TRX_RULE"
+      keywords:
+        - "dma"
+        - "transfer"
+        - "adc_update"
+      yaml: "rules/adc_dma_transfer_rule.yaml"

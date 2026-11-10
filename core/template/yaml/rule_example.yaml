@@ -1,0 +1,13 @@
+rule:
+  id: "ADC_DMA_TRANSFER_RULE"
+  trigger:
+    - "ADC.DR_UPDATED"
+  requires:
+    - "ADC.CR2.ADON == 1"
+  completion:
+    - "DMA.CH0.TRANSFER_COMPLETE == 1"
+  timeout: "10 ms"
+  error:
+    - "DMA.CH0.TRANSFER_ERROR == 1"
+  result:
+    - "TRCCONFIGR.CONFIGURATION_UPDATED = 1"

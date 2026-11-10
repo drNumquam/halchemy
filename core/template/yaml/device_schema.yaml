@@ -1,0 +1,87 @@
+$schema: "https://json-schema.org"
+title: "Microcontroller Device Configuration Schema"
+type: "object"
+required:
+  - "device"
+
+properties:
+  device:
+    type: "object"
+    required:
+      - "name"
+      - "description"
+      - "architecture"
+      - "word_size"
+      - "endianness"
+      - "globals"
+      - "cores"
+      - "peripherals"
+    additionalProperties: false
+    
+    properties:
+      name:
+        type: "string"
+        minLength: 1
+        
+      description:
+        type: "string"
+        
+      architecture:
+        type: "string"
+        minLength: 1
+        
+      word_size:
+        type: "integer"
+        enum: [8, 16, 32, 64]
+        
+      endianness:
+        type: "string"
+        enum: ["LE", "BE"]
+
+      globals:
+        type: "object"
+        required:
+          - "registers"
+          - "memory_regions"
+        additionalProperties: false
+        properties:
+          registers:
+            type: "array"
+            items:
+              $ref: "#/$defs/component_item"
+          memory_regions:
+            type: "array"
+            items:
+              $ref: "#/$defs/component_item"
+
+      cores:
+        type: "array"
+        items:
+          $ref: "#/$defs/component_item"
+
+      peripherals:
+        type: "array"
+        items:
+          $ref: "#/$defs/component_item"
+
+$defs:
+  component_item:
+    type: "object"
+    required:
+      - "id"
+      - "keywords"
+      - "yaml"
+    additionalProperties: false
+    properties:
+      id:
+        type: "string"
+        minLength: 1
+      keywords:
+        type: "array"
+        uniqueItems: true
+        items:
+          type: "string"
+          minLength: 1
+      yaml:
+        type: "string"
+        minLength: 1

@@ -1,0 +1,14 @@
+memory_region:
+  name: "FLASH_BANK_{0}"
+  description: "Main non-volatile memory divided into two distinct banks"
+  base_address: 0x08000000
+  size_bytes: 0x00040000 # 256 KB per bank
+  access: "RX"
+  alignment_bytes: 4
+  power_loss_retention: true
+  dma_accessible: true
+  cores_shared: false
+  array:
+    - index: "bank_idx"
+      range: [0, 1] # Generates FLASH_BANK_0 and FLASH_BANK_1
+      stride_bytes: 0x00040000

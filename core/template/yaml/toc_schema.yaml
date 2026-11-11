@@ -1,26 +1,93 @@
-# TOC schema for PDF document section indexing.
-# All child sections shall use the same schema as their parent section.
-
-source: ''       # string: source PDF filename
-pages:  0        # integer: otal number of pages in source PDF
-
-sections:
-
-  -id: 0         # integer: unique section identifier
-   number: ''    # string: section number as displayed in PDF document
-   title: ''     # string: section title as displayed in PDF document
-
-   start_page: 0 # integer: first page of the section
-   end_page:   0 # integer: last page of the section
-
-   start_y: 0.0     # float: vertical coordinate where section starts
-   end_y: 0.0       # float: vertical coordinate where section ends
-
-   pdf: ''       # string: relative path of extracted section PDF
-
-   keywords: []  # list[string]: keywords describing section content
-
-   references:      # list[reference]: references (exact or semantic) to other sections
-     - target_id: 0 # integer: referenced section id
-
-   children: []     # list[section]: child sections using the same schema
+$schema: 'https://json-schema.org/draft/2020-12/schema'
+$title: 'Table of Contents (TOC)'
+$comment: 'JSON Schema written in YAML for validating TOC data.'
+type: object
+additionalProperties: false
+required:
+  - source
+  - pages
+  - sections
+properties:
+  source:
+    type: string
+    description: 'Source PDF filename or path.'
+  pages:
+    type: integer
+    default: 0
+    description: 'Total number of pages in the source PDF.'
+  sections:
+    type: array
+    description: 'Top-level sections in the document.'
+    items:
+      $ref: '#/$defs/section'
+$defs:
+  section:
+    type: object
+    additionalProperties: false
+    required:
+      - id
+      - number
+      - title
+      - start_page
+      - end_page
+      - start_y
+      - end_y
+      - pdf
+      - keywords
+      - references
+      - children
+    properties:
+      id:
+        type: integer
+        default: 0
+        description: 'Unique section identifier.'
+      number:
+        type: string
+        description: 'Section number as displayed in the document.'
+      title:
+        type: string
+        description: 'Section title as displayed in the document.'
+      start_page:
+        type: integer
+        default: 0
+        description: 'First page of the section.'
+      end_page:
+        type: integer
+        default: 0
+        description: 'Last page of the section.'
+      start_y:
+        type: number
+        default: 0.0
+        description: 'Vertical coordinate where the section starts.'
+      end_y:
+        type: number
+        default: 0.0
+        description: 'Vertical coordinate where the section ends.'
+      pdf:
+        type: string
+        description: 'Relative path of the extracted section PDF.'
+      keywords:
+        type: array
+        description: 'Keywords describing the section content.'
+        items:
+          type: string
+      references:
+        type: array
+        description: 'References to other sections.'
+        items:
+          $ref: '#/$defs/reference'
+      children:
+        type: array
+        description: 'Child sections using the same structure as their parent.'
+        items:
+          $ref: '#/$defs/section'
+  reference:
+    type: object
+    additionalProperties: false
+    required:
+      - target_id
+    properties:
+      target_id:
+        type: integer
+        default: 0
+        description: 'Identifier of the referenced section.'

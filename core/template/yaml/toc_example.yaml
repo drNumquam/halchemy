@@ -1,0 +1,41 @@
+source: 'manuale.pdf'
+pages: 12
+sections:
+  - id: 1
+    number: '1'
+    title: 'Introduzione'
+    start_page: 1
+    end_page: 3
+    start_y: 0.0
+    end_y: 420.5
+    pdf: 'manuale.pdf'
+    keywords:
+      - 'panoramica'
+      - 'obiettivi'
+    references:
+      - target_id: 2
+    children:
+      - id: 11
+        number: '1.1'
+        title: 'Contesto'
+        start_page: 1
+        end_page: 2
+        start_y: 80.0
+        end_y: 300.0
+        pdf: 'manuale.pdf'
+        keywords:
+          - 'contesto'
+        references: []
+        children: []
+  - id: 2
+    number: '2'
+    title: 'Conclusioni'
+    start_page: 10
+    end_page: 12
+    start_y: 50.0
+    end_y: 600.0
+    pdf: 'manuale.pdf'
+    keywords:
+      - 'sintesi'
+    references: []
+    children: []

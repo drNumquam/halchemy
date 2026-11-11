@@ -2,25 +2,25 @@
 # All child sections shall use the same schema as their parent section.
 
 source: ''       # string: source PDF filename
-pages:           # integer: otal number of pages in source PDF
+pages:  0        # integer: otal number of pages in source PDF
 
 sections:
 
-  -id:           # integer: unique section identifier
+  -id: 0         # integer: unique section identifier
    number: ''    # string: section number as displayed in PDF document
    title: ''     # string: section title as displayed in PDF document
 
-   start_page:   # integer: first page of the section
-   end_page:     # integer: last page of the section
+   start_page: 0 # integer: first page of the section
+   end_page:   0 # integer: last page of the section
 
-   start_y:      # float: vertical coordinate where section starts
-   end_y:        # float: vertical coordinate where section ends
+   start_y: 0.0     # float: vertical coordinate where section starts
+   end_y: 0.0       # float: vertical coordinate where section ends
 
    pdf: ''       # string: relative path of extracted section PDF
 
    keywords: []  # list[string]: keywords describing section content
 
-   references:    # list[reference]: references (exact or semantic) to other sections
-     - target_id: # integer: referenced section id
+   references:      # list[reference]: references (exact or semantic) to other sections
+     - target_id: 0 # integer: referenced section id
 
-   children: []   # list[section]: child sections using the same schema
+   children: []     # list[section]: child sections using the same schema

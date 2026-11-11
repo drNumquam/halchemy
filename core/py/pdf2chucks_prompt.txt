@@ -1,62 +1,27 @@
-Write one commented and downloadable Python script. Code comments and prompt/prints must be in English. 
-Assume the input PDF is always indexed (has TOC): if not the script must end with a working message.
-Syntax: python pdf2chucks.py  <pdf> -o <output_folder>
+Write a commented and downloadable Python script named pdf2chunks.py. 
+Code comments and prompt/prints to user must be in English. 
+The script shall accept a PDF reference manual as input and generate in output directory:
+1. a toc.yaml file
+2. a sub folder "sections". For each section two files named [id]_[section#].pdf and [id]_[section#]_report.txt shall be created under this folder.
+3. a "report.txt" file containing the console output of the whole extracting process
+Assume the input PDF is always indexed (has TOC): if not the script must end with a worning message.
+Syntax: python pdf2chucks.py --pdf <pdf_file_pull_path> --o <output_directory>
 
-Example:
-\output_folder
+Output:
+=======
+output_directory/
     toc.yaml
-    \sections
-         <cnt>_<section_number>.pdf
+    report.txt
+    sections/
+         [id]_[section#].pdf
+         [id]_[section#]_report.txt
          ....
-         
-Example output:
-toc.yaml
-=========================================
-source: xxxxx.pdf
-pages: 1277
-
-sections:
-        -id: <cnt>
-         level: 1
-         number: "section_number"
-         title: "::::::"
-         start_page:
-         end_page:
-         start_y:
-         end_y:
-         pdf:  "pdf_section_relative_path"
-         keywords: 
-              - "a.."
-              - "b.."
-         children:
-              -id:
-               level: 2
-               number: 
-               title: ":::"
-               start_page:
-               end_page:
-               start_y:
-               end_y:
-               pdf: 
-               keywords:
-                  - "" 
-                  - ""
-               children: []
-            
-              -id: 
 
 Logic:
-1. Create output folder: PDF name (Windows-safe, max 80 chars). Copy original PDF there with complete report.txt file containing the console output of whole extracting process.
-2. Create sections/ subfolder. For each recursive TOC item, create a folder named: [id]_[section#]_[title] (Windows-safe, max 80 chars).
-3. Extract content using page Y-coordinates:
+
+1. Extract PDF section content using page Y-coordinates:
 	• If leaf: from section title start to next section title start (excluded).
 	• If non-leaf: from section title start to first child section title start (excluded).
-4. Save extracted content as PDF (same name as its folder) inside its specific folder. Trim everything before/after.
-5. In each section folder, generate a report.txt logging extraction anomalies.
-6. In the output folder named after the PDF (where the original is copied), alongside the global report.txt, also write toc.yaml: the TOC as a nested tree. Each node has:
-    id: the progressive number used in its folder name
-    number: the section number as in the TOC
-    title: the section title
-    page_start: the first page
-    page_end: the last page
-    sections: its child nodes, nested
+4. Save extracted content as PDF. Trim everything before/after.
+5. Generate section extraction report logging extraction anomalies.
+6. Write toc.yaml with reference to toc.yaml file.

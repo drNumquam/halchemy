@@ -1,22 +1,29 @@
 source: ''
-pages:
-
+pages: 0
 sections:
-
-  - id:
+  - id: 0
     number: ''
     title: ''
-    
-    start_page:
-    end_page:
-    
-    start_y:
-    end_y:
-    
+    start_page: 0
+    end_page: 0
+    start_y: 0.0
+    end_y: 0.0 
     pdf: ''
-    
-    keywords: []
-    
-    references: [] 
-      
-    children: []
+    keywords: 
+      - ''
+    references: 
+      - target_id: 0
+    children: 
+      -id: 0
+       number: ''
+       title: ''
+       start_page: 0
+       end_page: 0
+       start_y: 0.0
+       end_y: 0.0
+       pdf: ''
+       keywords:
+         - ''
+       references:
+         -taget_id: 0
+       children: []

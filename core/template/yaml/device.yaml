@@ -1,25 +1,29 @@
 device:
-  name: "" # Exact chip model name
-  description: "" # Short summary of the MCU
-  architecture: "" # e.g., ARM Cortex-M4, AVR, RISC-V
-  word_size: 0 # Register width in bits (8, 16, 32, 64)
-  endianness: "" # "LE" or "BE"
+  name: ''
+  description: ''
+  architecture: ''
+  word_size: 0 
+  endianness: ''
   globals:
     registers:
-      - id: "" # Global/system register block identifier
-        keywords: [""] # Search tags or categories
-        yaml: "" # Path to the corresponding .yaml file
+      - id: ''
+        keywords: 
+          - '' 
+        yaml: ''
     memory_regions:
-      - id: "" # e.g., FLASH, SRAM
-        keywords: [""]
-        yaml: ""
+      - id: ''
+        keywords: 
+          - ''
+        yaml: ''
   cores:
-    - id: "" # CPU core identifier
-      keywords: [""]
-      yaml: ""
+    - id: ''
+      keywords: 
+        - ''
+      yaml: ''
   peripherals:
-    - id: "" # e.g., GPIOA, USART1, SPI1
-      keywords: [""]
-      yaml: ""
+    - id: ''
+      keywords:
+        - ''
+      yaml: ''
 
 

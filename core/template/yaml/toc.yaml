@@ -5,13 +5,9 @@ sections:
     title: ''
     start_index: 0
     end_index: 0
-    start_anchor: ''
-    end_anchor: '' 
     children: 
       -id: 0
        title: ''
        start_index: 0
        end_index: 0
-       start_anchor: 0.0
-       end_anchor: 0.0
        children: []

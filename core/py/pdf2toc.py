@@ -1,38 +1,53 @@
 #!/usr/bin/env python3
-"""Create a YAML table of contents from a PDF's bookmarks.
+"""Generate and validate toc.yaml from a PDF's hierarchical bookmarks.
 
-The input PDF must contain a usable, hierarchical table of contents (bookmarks).
-The generated page indexes are zero-based and end_index is inclusive.
+Usage:
+    python pdf2toc.py --pdf /path/to/manual.pdf --o /path/to/output_directory
 
-Requires PyMuPDF: python -m pip install pymupdf
+Requirements:
+    python -m pip install pymupdf pyyaml jsonschema
+
+The output directory receives toc.yaml and report.txt. Section page numbers are
+one-based physical PDF pages, matching the repository TOC schema. The source
+field contains only the input PDF filename.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TextIO
+from typing import Any
+
+
+NUMBER_RE = re.compile(r"^\s*(\d+(?:\.\d+)*|[A-Z](?:\.\d+)*)\.?\s+(\S.*)$")
 
 
 @dataclass
 class Section:
-    """A PDF bookmark represented as a node in the output TOC tree."""
+    """One PDF bookmark in the hierarchical TOC."""
 
     id: int
+    number: str
     title: str
-    start_index: int
-    end_index: int = 0
+    start_page: int
+    start_y: float
+    level: int
+    end_page: int = 0
+    end_y: float = 0.0
+    pdf: str = ""
+    keywords: list[str] = field(default_factory=list)
+    references: list[dict[str, int]] = field(default_factory=list)
     children: list["Section"] = field(default_factory=list)
-    level: int = 1
 
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line options."""
     parser = argparse.ArgumentParser(
-        description="Generate toc.yaml and report.txt from a bookmarked PDF."
+        description="Create and validate toc.yaml from a PDF bookmark table of contents."
     )
     parser.add_argument("--pdf", required=True, help="Path to the input PDF file.")
     parser.add_argument(
@@ -42,28 +57,50 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def yaml_string(value: str) -> str:
-    """Encode a string as a valid YAML double-quoted scalar."""
-    # JSON string quoting is compatible with YAML double-quoted strings.
-    return json.dumps(value, ensure_ascii=False)
+def clean_title(raw_title: str) -> tuple[str, str]:
+    """Separate an optional leading section number from a bookmark title."""
+    title = " ".join(raw_title.split())
+    match = NUMBER_RE.match(title)
+    if match:
+        return match.group(1), match.group(2).strip()
+    return "", title
 
 
-def build_sections(bookmarks: list[list], page_count: int) -> list[Section]:
-    """Convert PyMuPDF's flat bookmark list into a nested section tree."""
-    entries: list[tuple[int, str, int]] = []
+def bookmark_y(destination: Any) -> float:
+    """Read a bookmark's vertical destination coordinate when available."""
+    try:
+        point = destination.get("to") if isinstance(destination, dict) else None
+        value = float(point.y) if point is not None else 0.0
+        return value if value >= 0 else 0.0
+    except (AttributeError, TypeError, ValueError):
+        return 0.0
+
+
+def build_sections(bookmarks: list[list[Any]], page_count: int) -> list[Section]:
+    """Build a nested section tree and assign page/Y boundaries."""
+    nodes: list[Section] = []
     for item in bookmarks:
-        level, title, page = item[:3]
-        if not isinstance(title, str) or not title.strip():
+        if len(item) < 3:
             continue
-        # PyMuPDF uses one-based page numbers; the schema uses zero-based indexes.
-        if not isinstance(page, int) or page < 1 or page > page_count:
+        level, raw_title, page = item[:3]
+        if not isinstance(raw_title, str) or not raw_title.strip():
             continue
-        entries.append((int(level), " ".join(title.split()), page - 1))
-
-    nodes = [
-        Section(id=index, title=title, start_index=page, level=level)
-        for index, (level, title, page) in enumerate(entries, start=1)
-    ]
+        try:
+            level, page = int(level), int(page)
+        except (TypeError, ValueError):
+            continue
+        if level < 1 or page < 1 or page > page_count:
+            continue
+        number, title = clean_title(raw_title)
+        destination = item[3] if len(item) > 3 else None
+        nodes.append(Section(
+            id=len(nodes) + 1,
+            number=number,
+            title=title,
+            start_page=page,
+            start_y=bookmark_y(destination),
+            level=level,
+        ))
 
     roots: list[Section] = []
     stack: list[Section] = []
@@ -76,42 +113,65 @@ def build_sections(bookmarks: list[list], page_count: int) -> list[Section]:
             roots.append(node)
         stack.append(node)
 
-    # A section ends on the page immediately before the next sibling/ancestor-level
-    # entry. The final section runs to the end of the PDF. Page indexes are inclusive.
+    # The next same-level or ancestor-level bookmark ends this section. A parent
+    # therefore includes its child sections, while each child ends at its sibling
+    # or the next section above it in the TOC hierarchy.
     for index, node in enumerate(nodes):
-        next_boundary = next(
+        following = next(
             (candidate for candidate in nodes[index + 1:]
              if candidate.level <= node.level),
             None,
         )
-        last_page = next_boundary.start_index - 1 if next_boundary else page_count - 1
-        node.end_index = max(node.start_index, last_page)
-
+        if following is None:
+            node.end_page = page_count
+            node.end_y = 0.0
+        elif following.start_page > node.start_page:
+            node.end_page = following.start_page - 1
+            node.end_y = 0.0
+        else:
+            node.end_page = node.start_page
+            node.end_y = following.start_y
+        if node.end_page < node.start_page:
+            node.end_page = node.start_page
     return roots
 
 
+def walk(sections: list[Section]):
+    """Yield all sections in document order."""
+    for section in sections:
+        yield section
+        yield from walk(section.children)
+
+
+def yaml_string(value: str) -> str:
+    """Encode a string using JSON quoting, compatible with YAML double quotes."""
+    return json.dumps(value, ensure_ascii=False)
+
+
 def render_yaml(source: str, page_count: int, sections: list[Section]) -> str:
-    """Render the current toc.yaml structure without requiring a YAML package."""
-    lines = [
-        f"source: {yaml_string(source)}",
-        f"pages: {page_count}",
-        "sections:",
-    ]
+    """Render all fields required by the repository's toc.yaml schema."""
+    lines = [f"source: {yaml_string(source)}", f"pages: {page_count}", "sections:"]
 
     def emit(items: list[Section], indent: int) -> None:
         pad = " " * indent
         for section in items:
             lines.extend([
                 f"{pad}- id: {section.id}",
+                f"{pad}  number: {yaml_string(section.number)}",
                 f"{pad}  title: {yaml_string(section.title)}",
-                f"{pad}  start_index: {section.start_index}",
-                f"{pad}  end_index: {section.end_index}",
-                f"{pad}  children:",
+                f"{pad}  start_page: {section.start_page}",
+                f"{pad}  end_page: {section.end_page}",
+                f"{pad}  start_y: {section.start_y:.3f}",
+                f"{pad}  end_y: {section.end_y:.3f}",
+                f"{pad}  pdf: {yaml_string(section.pdf)}",
+                f"{pad}  keywords: []",
+                f"{pad}  references: []",
             ])
             if section.children:
+                lines.append(f"{pad}  children:")
                 emit(section.children, indent + 4)
             else:
-                lines[-1] += " []"
+                lines.append(f"{pad}  children: []")
 
     if sections:
         emit(sections, 2)
@@ -121,12 +181,12 @@ def render_yaml(source: str, page_count: int, sections: list[Section]) -> str:
 
 
 class Reporter:
-    """Print messages and retain the same output for report.txt."""
+    """Print console messages and keep a copy for report.txt."""
 
     def __init__(self) -> None:
         self.lines: list[str] = []
 
-    def write(self, message: str = "") -> None:
+    def log(self, message: str) -> None:
         print(message)
         self.lines.append(message)
 
@@ -134,73 +194,113 @@ class Reporter:
         path.write_text("\n".join(self.lines) + "\n", encoding="utf-8")
 
 
-def run(pdf_path: Path, output_dir: Path, reporter: Reporter) -> int:
-    """Process the PDF and write the requested output files."""
+def validate_toc(toc_path: Path, schema_path: Path) -> tuple[bool, str]:
+    """Validate the generated YAML against toc_schema.yaml."""
     try:
-        import pymupdf
-    except ImportError:
-        reporter.write(
-            "WARNING: PyMuPDF is not installed. Install it with: "
-            "python -m pip install pymupdf"
+        import yaml
+        from jsonschema import Draft202012Validator
+    except ImportError as exc:
+        return False, (
+            "Validation dependencies are missing; install them with "
+            "python -m pip install pyyaml jsonschema. "
+            f"Details: {exc}"
         )
-        return 2
 
-    if not pdf_path.is_file() or pdf_path.suffix.lower() != ".pdf":
-        reporter.write(f"WARNING: The input PDF file does not exist: {pdf_path}")
-        return 2
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    report_path = output_dir / "report.txt"
-
+    if not schema_path.is_file():
+        return False, f"Schema file was not found: {schema_path}"
     try:
-        with pymupdf.open(pdf_path) as document:
-            if document.needs_pass:
-                reporter.write("WARNING: The PDF is password-protected; no TOC was created.")
-                return 2
-
-            page_count = len(document)
-            bookmarks = document.get_toc(simple=True)
-            sections = build_sections(bookmarks, page_count)
-
-            reporter.write(f"Input PDF: {pdf_path}")
-            reporter.write(f"Pages: {page_count}")
-            reporter.write(f"Usable TOC entries: {sum(1 for _ in walk(sections))}")
-
-            if not sections:
-                reporter.write(
-                    "WARNING: This PDF has no usable table of contents (bookmarks). "
-                    "No toc.yaml was created."
-                )
-                return 1
-
-            yaml_text = render_yaml(str(pdf_path.resolve()), page_count, sections)
-            (output_dir / "toc.yaml").write_text(yaml_text, encoding="utf-8")
-            reporter.write(f"Created TOC file: {output_dir / 'toc.yaml'}")
-            reporter.write("Page indexes in toc.yaml are zero-based; end_index is inclusive.")
-            reporter.write("Process completed successfully.")
-            return 0
+        with toc_path.open("r", encoding="utf-8") as stream:
+            toc_data = yaml.safe_load(stream)
+        with schema_path.open("r", encoding="utf-8") as stream:
+            schema = yaml.safe_load(stream)
+        Draft202012Validator.check_schema(schema)
+        errors = sorted(
+            Draft202012Validator(schema).iter_errors(toc_data),
+            key=lambda error: list(map(str, error.absolute_path)),
+        )
     except Exception as exc:
-        reporter.write(f"WARNING: PDF processing failed: {exc}")
-        return 2
-    finally:
-        # Save all console messages, including warnings and completion status.
-        reporter.save(report_path)
-        if report_path.exists():
-            print(f"Created process report: {report_path}")
+        return False, f"Could not parse or validate YAML/schema: {exc}"
 
-
-def walk(sections: list[Section]):
-    """Yield every section recursively."""
-    for section in sections:
-        yield section
-        yield from walk(section.children)
+    if errors:
+        error = errors[0]
+        location = ".".join(str(part) for part in error.absolute_path) or "root"
+        suffix = f" ({len(errors)} validation errors total)" if len(errors) > 1 else ""
+        return False, f"{location}: {error.message}{suffix}"
+    return True, "toc.yaml is valid against toc_schema.yaml."
 
 
 def main() -> int:
-    """Run the command-line application."""
+    """Run the PDF-to-TOC workflow."""
     args = parse_args()
+    pdf_path = Path(args.pdf).expanduser()
+    output_dir = Path(args.output).expanduser()
     reporter = Reporter()
-    return run(Path(args.pdf).expanduser(), Path(args.output).expanduser(), reporter)
+    report_path: Path | None = None
+    exit_code = 0
+
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        report_path = output_dir / "report.txt"
+        if not pdf_path.is_file() or pdf_path.suffix.lower() != ".pdf":
+            reporter.log(f"WARNING: The input file does not exist or is not a PDF: {pdf_path}")
+            exit_code = 2
+        else:
+            try:
+                import pymupdf
+            except ImportError:
+                try:
+                    import fitz as pymupdf
+                except ImportError:
+                    reporter.log(
+                        "WARNING: PyMuPDF is not installed. Install it with: "
+                        "python -m pip install pymupdf"
+                    )
+                    exit_code = 2
+                    pymupdf = None
+
+            if pymupdf is not None:
+                reporter.log(f"Input PDF: {pdf_path}")
+                reporter.log(f"Output directory: {output_dir}")
+                with pymupdf.open(pdf_path) as document:
+                    if document.needs_pass:
+                        reporter.log("WARNING: The PDF is password-protected; no TOC was created.")
+                        exit_code = 2
+                        sections = []
+                        page_count = len(document)
+                    else:
+                        page_count = len(document)
+                        sections = build_sections(document.get_toc(simple=False), page_count)
+
+                if exit_code == 0 and not sections:
+                    reporter.log(
+                        "WARNING: The PDF has no usable table of contents (bookmarks). "
+                        "No toc.yaml was created."
+                    )
+                    exit_code = 1
+                elif exit_code == 0:
+                    toc_path = output_dir / "toc.yaml"
+                    toc_path.write_text(
+                        render_yaml(pdf_path.name, page_count, sections), encoding="utf-8"
+                    )
+                    reporter.log(f"Created TOC file: {toc_path}")
+                    reporter.log(f"PDF pages: {page_count}")
+                    reporter.log(f"TOC entries: {sum(1 for _ in walk(sections))}")
+                    schema_path = (
+                        Path(__file__).resolve().parents[1]
+                        / "template" / "yaml" / "toc_schema.yaml"
+                    )
+                    valid, message = validate_toc(toc_path, schema_path)
+                    reporter.log(("Validation passed: " if valid else "WARNING: Validation failed: ") + message)
+                    exit_code = 0 if valid else 2
+    except Exception as exc:
+        reporter.log(f"WARNING: Processing failed: {exc}")
+        exit_code = 2
+    finally:
+        if report_path is not None:
+            reporter.log(f"Process finished with exit code {exit_code}.")
+            reporter.save(report_path)
+
+    return exit_code
 
 
 if __name__ == "__main__":

@@ -1,13 +1,13 @@
 Write a commented and downloadable Python script named pdf2toc.py. 
 Code comments and prompt/prints to user must be in English. 
 The script shall accept a PDF device reference manual as input and generate to output directory:
-1. a toc.yaml file following this template
+1. a toc.yaml file following the template:
 
 (put here toc.yaml file content) (the source filed shall contain only the pdf file name without path)
 
 2. a "report.txt" file containing the console output of the whole creation process
 Assume the input PDF is always indexed (has TOC): if not the script must end with a worning message.
-Syntax: python pdf2toc.py --pdf <pdf_file_pull_path> --o <output_directory>
+Syntax: python pdf2toc.py --pdf <pdf_file_pull_path> [--schema <yaml_schema_file_full_path>] --o <output_directory>
 
 Output:
 =======
@@ -15,6 +15,4 @@ output_directory/
     toc.yaml
     report.txt
 
-3. validate the toc.yaml file content using this schema
-
-(put here toc_schema.yaml file content)
+The python script shall optionally accept a yaml schema file to validate the toc.yaml file content. If no schema file is specified validation shall be skipped.

@@ -10,8 +10,8 @@ sections:
     children: 
       -id: 0
        title: ''
-       start_page: 0
-       end_page: 0
+       start_index: 0
+       end_index: 0
        start_anchor: 0.0
        end_anchor: 0.0
        children: []

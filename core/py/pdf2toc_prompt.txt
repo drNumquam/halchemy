@@ -6,7 +6,7 @@ The script shall accept a PDF device reference manual as input and generate to o
 (put here toc.yaml file content) (the source filed shall contain only the pdf file name without path)
 
 2. a "report.txt" file containing the console output of the whole creation process
-Assume the input PDF is always indexed (has TOC): if not the script must end with a worning message.
+Assume the input PDF is always indexed (has TOC): if not the script must end with a warning message.
 Syntax: python pdf2toc.py --pdf <pdf_file_pull_path> [--schema <yaml_schema_file_full_path>] --o <output_directory>
 
 Output:

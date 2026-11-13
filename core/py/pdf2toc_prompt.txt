@@ -3,7 +3,7 @@ Code comments and prompt/prints to user must be in English.
 The script shall accept a PDF device reference manual as input and generate to output directory:
 1. a toc.yaml file following this template
 
-(put here toc.yaml file content)
+(put here toc.yaml file content) (the source filed shall contain only the pdf file name without path)
 
 2. a "report.txt" file containing the console output of the whole creation process
 Assume the input PDF is always indexed (has TOC): if not the script must end with a worning message.

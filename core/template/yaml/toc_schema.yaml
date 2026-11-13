@@ -1,6 +1,6 @@
 $schema: 'https://json-schema.org/draft/2020-12/schema'
 $title: 'Table of Contents (TOC)'
-$comment: 'JSON Schema written in YAML for validating TOC data.'
+$comment: 'JSON Schema in YAML for validating toc.yaml data.'
 type: object
 additionalProperties: false
 required:
@@ -13,7 +13,7 @@ properties:
     description: 'Source PDF filename or path.'
   pages:
     type: integer
-    default: 0
+    minimum: 0
     description: 'Total number of pages in the source PDF.'
   sections:
     type: array
@@ -26,68 +26,27 @@ $defs:
     additionalProperties: false
     required:
       - id
-      - number
       - title
-      - start_page
-      - end_page
-      - start_y
-      - end_y
-      - pdf
-      - keywords
-      - references
+      - start_index
+      - end_index
       - children
     properties:
       id:
         type: integer
-        default: 0
-        description: 'Unique section identifier.'
-      number:
-        type: string
-        description: 'Section number as displayed in the document.'
+        description: 'Integer identifier of this node or section.'
       title:
         type: string
-        description: 'Section title as displayed in the document.'
-      start_page:
+        description: 'Title of the section.'
+      start_index:
         type: integer
-        default: 0
-        description: 'First page of the section.'
-      end_page:
+        minimum: 0
+        description: 'Absolute or physical page index where the section starts.'
+      end_index:
         type: integer
-        default: 0
-        description: 'Last page of the section.'
-      start_y:
-        type: number
-        default: 0.0
-        description: 'Vertical coordinate where the section starts.'
-      end_y:
-        type: number
-        default: 0.0
-        description: 'Vertical coordinate where the section ends.'
-      pdf:
-        type: string
-        description: 'Relative path of the extracted section PDF.'
-      keywords:
-        type: array
-        description: 'Keywords describing the section content.'
-        items:
-          type: string
-      references:
-        type: array
-        description: 'References to other sections.'
-        items:
-          $ref: '#/$defs/reference'
+        minimum: 0
+        description: 'Absolute or physical page index where the section ends.'
       children:
         type: array
-        description: 'Child sections using the same structure as their parent.'
+        description: 'Nested sections with the same structure as their parent.'
         items:
           $ref: '#/$defs/section'
-  reference:
-    type: object
-    additionalProperties: false
-    required:
-      - target_id
-    properties:
-      target_id:
-        type: integer
-        default: 0
-        description: 'Identifier of the referenced section.'

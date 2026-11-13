@@ -1,4 +1,4 @@
-Write a commented and downloadable Python script named pdf2chunks.py. 
+Write a commented and downloadable Python script named pdf2toc.py. 
 Code comments and prompt/prints to user must be in English. 
 The script shall accept a PDF device reference manual as input and generate to output directory:
 1. a toc.yaml file following this template

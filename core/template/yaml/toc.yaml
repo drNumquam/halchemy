@@ -3,8 +3,8 @@ pages: 0
 sections:
   - id: 0
     title: ''
-    start_page: 0
-    end_page: 0
+    start_index: 0
+    end_index: 0
     start_anchor: ''
     end_anchor: '' 
     children: 

@@ -7,7 +7,7 @@ The script shall accept a PDF device reference manual as input and generate to o
 
 2. a "report.txt" file containing the console output of the whole creation process
 Assume the input PDF is always indexed (has TOC): if not the script must end with a worning message.
-Syntax: python pdf2chucks.py --pdf <pdf_file_pull_path> --o <output_directory>
+Syntax: python pdf2toc.py --pdf <pdf_file_pull_path> --o <output_directory>
 
 Output:
 =======

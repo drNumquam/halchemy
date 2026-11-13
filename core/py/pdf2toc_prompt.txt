@@ -15,4 +15,6 @@ output_directory/
     toc.yaml
     report.txt
 
+3. validate the toc.yaml file content using this schema
 
+(put here toc_schema.yaml file content)

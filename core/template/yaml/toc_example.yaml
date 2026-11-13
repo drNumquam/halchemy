@@ -2,40 +2,27 @@ source: 'example.pdf'
 pages: 12
 sections:
   - id: 1
-    number: '1'
     title: 'Introduction'
-    start_page: 1
-    end_page: 3
-    start_y: 0.0
-    end_y: 420.5
-    pdf: 'example.pdf'
-    keywords:
-      - 'overview'
-      - 'objectives'
-    references:
-      - target_id: 2
+    start_index: 0
+    end_index: 4
     children:
       - id: 11
-        number: '1.1'
         title: 'Background'
-        start_page: 1
-        end_page: 2
-        start_y: 80.0
-        end_y: 300.0
-        pdf: 'example.pdf'
-        keywords:
-          - 'context'
-        references: []
+        start_index: 0
+        end_index: 1
+        children: []
+      - id: 12
+        title: 'Objectives and scope'
+        start_index: 2
+        end_index: 4
         children: []
   - id: 2
-    number: '2'
+    title: 'Methodology'
+    start_index: 5
+    end_index: 8
+    children: []
+  - id: 3
     title: 'Conclusion'
-    start_page: 10
-    end_page: 12
-    start_y: 50.0
-    end_y: 600.0
-    pdf: 'example.pdf'
-    keywords:
-      - 'summary'
-    references: []
+    start_index: 9
+    end_index: 11
     children: []

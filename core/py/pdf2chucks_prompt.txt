@@ -1,9 +1,11 @@
 Write a commented and downloadable Python script named pdf2chunks.py. 
 Code comments and prompt/prints to user must be in English. 
-The script shall accept a PDF reference manual as input and generate in output directory:
-1. a toc.yaml file
-2. a sub folder "sections". For each section two files named [id]_[section#].pdf and [id]_[section#]_report.txt shall be created under this folder.
-3. a "report.txt" file containing the console output of the whole extracting process
+The script shall accept a PDF device reference manual as input and generate to output directory:
+1. a toc.yaml file following this template
+
+(put here toc.yaml file content)
+
+2. a "report.txt" file containing the console output of the whole creation process
 Assume the input PDF is always indexed (has TOC): if not the script must end with a worning message.
 Syntax: python pdf2chucks.py --pdf <pdf_file_pull_path> --o <output_directory>
 
@@ -12,16 +14,5 @@ Output:
 output_directory/
     toc.yaml
     report.txt
-    sections/
-         [id]_[section#].pdf
-         [id]_[section#]_report.txt
-         ....
 
-Logic:
 
-1. Extract PDF section content using page Y-coordinates:
-	• If leaf: from section title start to next section title start (excluded).
-	• If non-leaf: from section title start to first child section title start (excluded).
-4. Save extracted content as PDF. Trim everything before/after.
-5. Generate section extraction report logging extraction anomalies.
-6. Write toc.yaml with reference to toc.yaml file.

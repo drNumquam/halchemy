@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import os
 import re
+import json
 import sys
 from contextlib import AsyncExitStack
 import yaml
@@ -218,6 +219,39 @@ def print_aligned_table(sorted_scores: list, original_nodes: dict):
         print(f"| {row_id.ljust(id_width)} | {row_title.ljust(title_width)} | {row_pages.center(pages_width)} | {row_boundary.ljust(boundary_width)} | {row_confidence.center(confidence_width)} |")
 
 
+# EXPORT TABLE TO JSON FILE
+def save_result_table_as_json(
+    json_path: str,
+    sorted_scores: list,
+    original_nodes: dict,
+) -> None:
+    """
+    Export to JSON file the same information displayed in the final table.
+    """
+
+    rows = []
+
+    for node_id, score in sorted_scores:
+        node_info = original_nodes[node_id]
+
+        text_boundary = (
+            f"From this title up to (excluding) {node_info['text_end_before']}"
+            if node_info["text_end_before"] is not None
+            else "From this title through section end"
+        )
+
+        rows.append({
+            "node_id": node_id,
+            "title": node_info["title"],
+            "pages": node_info["pages"],
+            "text_boundary": text_boundary,
+            "confidence": round(score, 2)
+        })
+
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(rows, f, indent=2, ensure_ascii=False)
+
+
 # --- 5. PER-NODE ANALYSIS WITH COMPLETE VALIDATION ---
 async def analyze_peripheral_nodes(toc_nodes: list, copilot_sessions=None):
     system_prompt = (
@@ -314,6 +348,11 @@ async def analyze_peripheral_nodes(toc_nodes: list, copilot_sessions=None):
     )
     print_aligned_table(sorted_scores, original_nodes)
     print()
+    save_result_table_as_json(
+    "peripheral_nodes.json",
+    sorted_scores,
+    original_nodes
+    )
 
 
 # --- 6. PARAMETER HANDLING ---

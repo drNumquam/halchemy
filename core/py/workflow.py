@@ -9,10 +9,8 @@ import yaml
 LLM_PROVIDER = "copilot"  # Set to "qwen" to use the local Qwen model.
 
 QWEN_MODEL_NAME = "qwen/qwen3.5-9b"
-QWEN_BATCH_SIZE = 8
 
 COPILOT_MODEL_NAME = "auto"
-COPILOT_BATCH_SIZE = 8
 
 client = None
 if LLM_PROVIDER == "qwen":
@@ -26,42 +24,79 @@ if LLM_PROVIDER == "qwen":
         http_client=httpx.Client(trust_env=False, timeout=600.0)
     )
     MODEL_NAME = QWEN_MODEL_NAME
-    BATCH_SIZE = QWEN_BATCH_SIZE
 elif LLM_PROVIDER == "copilot":
     MODEL_NAME = COPILOT_MODEL_NAME
-    BATCH_SIZE = COPILOT_BATCH_SIZE
 else:
     raise ValueError(f"Unsupported LLM_PROVIDER: {LLM_PROVIDER}")
 
 
-# --- 2. EXTRACT ROOT NODES FROM THE YAML FILE ---
-def extract_root_nodes(toc_data: dict) -> list:
+# --- 2. EXTRACT ALL NODES FROM THE YAML FILE ---
+def extract_toc_nodes(toc_data: dict) -> list:
     sections = toc_data.get("sections", [])
-    root_nodes = []
-    for node in sections:
-        if isinstance(node, dict) and "id" in node and "title" in node:
-            start_index = node.get("start_index")
-            end_index = node.get("end_index")
+    toc_nodes = []
 
-            if start_index is not None and end_index is not None:
-                pages_text = f"{start_index} - {end_index}" if start_index != end_index else f"{start_index}"
-            elif start_index is not None:
-                pages_text = str(start_index)
-            else:
-                pages_text = "N/A"
+    def visit(nodes: list) -> None:
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
 
-            root_nodes.append({
-                "id": node["id"],
-                "title": node["title"],
-                "pages": pages_text
-            })
-    return root_nodes
+            children = node.get("children", [])
+            if "id" in node and "title" in node:
+                start_index = node.get("start_index")
+                end_index = node.get("end_index")
+                text_end_before = None
+
+                if (
+                    isinstance(children, list)
+                    and children
+                    and isinstance(children[0], dict)
+                    and children[0].get("start_index") is not None
+                ):
+                    end_index = children[0]["start_index"]
+                    text_end_before = children[0].get("title")
+
+                if start_index is not None and end_index is not None:
+                    pages_text = (
+                        f"{start_index} - {end_index}"
+                        if start_index != end_index
+                        else f"{start_index}"
+                    )
+                elif start_index is not None:
+                    pages_text = str(start_index)
+                else:
+                    pages_text = "N/A"
+
+                toc_nodes.append({
+                    "id": node["id"],
+                    "title": node["title"],
+                    "pages": pages_text,
+                    "text_end_before": text_end_before,
+                })
+
+            if isinstance(children, list):
+                visit(children)
+
+    if isinstance(sections, list):
+        visit(sections)
+    return toc_nodes
 
 
 # --- 3. LLM CALL AND RESPONSE PARSING ---
-def call_qwen_llm(system_prompt: str, node_batch: list) -> str:
-    llm_payload = [{"id": node["id"], "title": node["title"]} for node in node_batch]
-    nodes_yaml = yaml.dump(llm_payload, allow_unicode=True, sort_keys=False)
+def build_node_prompt(node: dict) -> str:
+    node_yaml = yaml.dump(
+        {"id": node["id"], "title": node["title"]},
+        allow_unicode=True,
+        sort_keys=False,
+    )
+    return (
+        "Evaluate this single TOC node for how likely its title is to indicate "
+        "information about ARM peripherals. Score only this node.\n\n"
+        f"Node:\n{node_yaml}"
+    )
+
+
+def call_qwen_llm(system_prompt: str, node: dict) -> str:
+    user_prompt = build_node_prompt(node)
 
     if client is None:
         raise RuntimeError("The Qwen client is not configured.")
@@ -71,10 +106,10 @@ def call_qwen_llm(system_prompt: str, node_batch: list) -> str:
             model=MODEL_NAME,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Please evaluate the following {len(llm_payload)} nodes:\n\n{nodes_yaml}"}
+                {"role": "user", "content": user_prompt}
             ],
             temperature=0.1,
-            max_tokens=4096,
+            max_tokens=256,
             reasoning_effort="none",
             stream=False
         )
@@ -83,10 +118,10 @@ def call_qwen_llm(system_prompt: str, node_batch: list) -> str:
             model=MODEL_NAME,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Please evaluate the following {len(llm_payload)} nodes:\n\n{nodes_yaml}"}
+                {"role": "user", "content": user_prompt}
             ],
             temperature=0.1,
-            max_tokens=4096,
+            max_tokens=256,
             stream=False
         )
 
@@ -97,22 +132,19 @@ def call_qwen_llm(system_prompt: str, node_batch: list) -> str:
 
 async def call_llm(
     system_prompt: str,
-    node_batch: list,
+    node: dict,
     copilot_session=None,
 ) -> str:
     if LLM_PROVIDER == "qwen":
-        return call_qwen_llm(system_prompt, node_batch)
+        return call_qwen_llm(system_prompt, node)
 
     if copilot_session is None:
         raise RuntimeError("The GitHub Copilot session has not been initialized.")
 
-    llm_payload = [{"id": node["id"], "title": node["title"]} for node in node_batch]
-    nodes_yaml = yaml.dump(llm_payload, allow_unicode=True, sort_keys=False)
-    prompt = (
-        f"{system_prompt}\n\n"
-        f"Please evaluate the following {len(llm_payload)} nodes:\n\n{nodes_yaml}"
+    user_prompt = build_node_prompt(node)
+    response = await copilot_session.send_and_wait(
+        f"{system_prompt}\n\n{user_prompt}"
     )
-    response = await copilot_session.send_and_wait(prompt)
     if response is None or not response.data.content:
         raise RuntimeError("GitHub Copilot returned no content.")
 
@@ -137,48 +169,60 @@ def extract_scores(llm_content: str, original_nodes: dict) -> dict:
 
 # --- 4. VERTICALLY ALIGNED TABLE FORMATTING ---
 def print_aligned_table(sorted_scores: list, original_nodes: dict):
-    id_header, title_header, pages_header, confidence_header = (
+    id_header, title_header, pages_header, boundary_header, confidence_header = (
         "Node ID",
         "Title",
         "Pages",
+        "Text boundary",
         "Confidence",
     )
     rows = []
 
     for node_id, score in sorted_scores:
         node_info = original_nodes[node_id]
+        text_boundary = (
+            f"From this title up to (excluding) {node_info['text_end_before']}"
+            if node_info["text_end_before"] is not None
+            else "From this title through section end"
+        )
         rows.append((
             str(node_id),
             node_info["title"],
             node_info["pages"],
+            text_boundary,
             f"{score:.2f}"
         ))
 
-    id_column, title_column, pages_column, confidence_column = zip(*rows)
+    id_column, title_column, pages_column, boundary_column, confidence_column = zip(*rows)
 
     id_width = max(len(id_header), *(len(value) for value in id_column), 4)
     title_width = max(len(title_header), *(len(value) for value in title_column), 4)
     pages_width = max(len(pages_header), *(len(value) for value in pages_column), 4)
+    boundary_width = max(
+        len(boundary_header),
+        *(len(value) for value in boundary_column),
+        4,
+    )
     confidence_width = max(
         len(confidence_header),
         *(len(value) for value in confidence_column),
         4,
     )
 
-    print(f"| {id_header.ljust(id_width)} | {title_header.ljust(title_width)} | {pages_header.center(pages_width)} | {confidence_header.center(confidence_width)} |")
-    print(f"| :{'-' * (id_width - 1)} | :{'-' * (title_width - 1)} | :{'-' * (pages_width - 2)}: | :{'-' * (confidence_width - 2)}: |")
+    print(f"| {id_header.ljust(id_width)} | {title_header.ljust(title_width)} | {pages_header.center(pages_width)} | {boundary_header.ljust(boundary_width)} | {confidence_header.center(confidence_width)} |")
+    print(f"| :{'-' * (id_width - 1)} | :{'-' * (title_width - 1)} | :{'-' * (pages_width - 2)}: | :{'-' * (boundary_width - 1)} | :{'-' * (confidence_width - 2)}: |")
 
-    for row_id, row_title, row_pages, row_confidence in rows:
-        print(f"| {row_id.ljust(id_width)} | {row_title.ljust(title_width)} | {row_pages.center(pages_width)} | {row_confidence.center(confidence_width)} |")
+    for row_id, row_title, row_pages, row_boundary, row_confidence in rows:
+        print(f"| {row_id.ljust(id_width)} | {row_title.ljust(title_width)} | {row_pages.center(pages_width)} | {row_boundary.ljust(boundary_width)} | {row_confidence.center(confidence_width)} |")
 
 
-# --- 5. BATCH ANALYSIS WITH COMPLETE VALIDATION ---
-async def analyze_peripheral_nodes(root_nodes: list, copilot_session=None):
+# --- 5. PER-NODE ANALYSIS WITH COMPLETE VALIDATION ---
+async def analyze_peripheral_nodes(toc_nodes: list, copilot_session=None):
     system_prompt = (
         "You are an expert in embedded architectures, ARM processors, and microcontrollers. "
-        "You will be given a small batch of root nodes (id and title) from an ARM Technical Reference Manual.\n\n"
+        "You will be given exactly one TOC node (id and title) from an ARM Technical Reference Manual per request.\n\n"
         "TASK:\n"
-        "Assign each node an independent confidence score from 0.00 to 1.00 indicating how likely "
+        "Assign this node an independent confidence score from 0.00 to 1.00 indicating how likely "
         "its title suggests information about ARM PERIPHERALS or peripheral/bus interfaces "
         "(e.g., GIC/interrupt controller, Timer, external buses/APB/Utility bus, LLPP/SPP peripheral ports, "
         "Debug/ETM/PMU, PPU, external registers).\n\n"
@@ -188,54 +232,59 @@ async def analyze_peripheral_nodes(root_nodes: list, copilot_session=None):
         "- 0.00 - 0.15: CPU core internals, instructions, or document metadata (e.g., Contents, Introduction, Programmers' model, SIMD, Revisions).\n\n"
         "OUTPUT RULES:\n"
         "- Return ONLY a Markdown table with columns: `| Node ID | Title | Confidence |`\n"
-        "- Include ALL provided nodes in the batch without skipping any.\n"
+        "- Return exactly one data row for the provided node; preserve its ID and title exactly.\n"
         "- No introductory or concluding text."
     )
 
     original_nodes = {
-        str(node["id"]): {"title": node["title"], "pages": node["pages"]}
-        for node in root_nodes
+        str(node["id"]): {
+            "title": node["title"],
+            "pages": node["pages"],
+            "text_end_before": node["text_end_before"],
+        }
+        for node in toc_nodes
     }
     total_scores = {}
 
-    total_batches = (len(root_nodes) + BATCH_SIZE - 1) // BATCH_SIZE
-    for batch_start in range(0, len(root_nodes), BATCH_SIZE):
-        batch = root_nodes[batch_start:batch_start + BATCH_SIZE]
-        batch_number = (batch_start // BATCH_SIZE) + 1
-        print(f"  Processing batch {batch_number}/{total_batches} ({len(batch)} nodes)...")
+    for node_number, node in enumerate(toc_nodes, start=1):
+        node_id = str(node["id"])
+        print(f"  Processing node {node_number}/{len(toc_nodes)} (ID {node_id})...")
+        llm_output = await call_llm(system_prompt, node, copilot_session)
+        total_scores.update(
+            extract_scores(llm_output, {node_id: original_nodes[node_id]})
+        )
 
-        llm_output = await call_llm(system_prompt, batch, copilot_session)
-        batch_scores = extract_scores(llm_output, original_nodes)
-        total_scores.update(batch_scores)
+    for attempt in range(1, 3):
+        missing_nodes = [
+            node for node in toc_nodes if str(node["id"]) not in total_scores
+        ]
+        if not missing_nodes:
+            break
 
-    recovery_attempts = 0
-    while len(total_scores) < len(root_nodes) and recovery_attempts < 2:
-        recovery_attempts += 1
-        missing_nodes = [node for node in root_nodes if str(node["id"]) not in total_scores]
-        print(f"  Retrying for {len(missing_nodes)} missing nodes...")
-        llm_output = await call_llm(system_prompt, missing_nodes, copilot_session)
-        total_scores.update(extract_scores(llm_output, original_nodes))
+        for node in missing_nodes:
+            node_id = str(node["id"])
+            print(
+                f"  Retry {attempt}/2 for node ID {node_id}: "
+                "no valid score was returned."
+            )
+            llm_output = await call_llm(system_prompt, node, copilot_session)
+            total_scores.update(
+                extract_scores(llm_output, {node_id: original_nodes[node_id]})
+            )
 
     # Sort by descending confidence, then by ascending node ID to break ties.
-    sorted_scores = sorted(
-        total_scores.items(),
-        key=lambda item: (-item.pop() if False else 0)  # unused placeholder
-    )
-    sorted_scores = [
-        (node_id, score)
-        for score, node_id in sorted(
-            ((score, int(node_id)) for node_id, score in total_scores.items()),
-            key=lambda x: (-x.real if isinstance(x, float) else 0)
-        )
-    ]
-    # Build the final ordering: descending score, then ascending node ID.
     sorted_pairs = sorted(
-        ((score, int(node_id), node_id) for node_id, score in total_scores.items()),
+        (
+            (score, int(node_id), node_id)
+            for node_id, score in total_scores.items()
+        ),
         key=lambda pair: (-pair[0], pair[1])
     )
     sorted_scores = [(node_id, score) for score, _, node_id in sorted_pairs]
 
-    print(f"\nAnalysis result ({len(sorted_scores)}/{len(root_nodes)} nodes evaluated):\n")
+    print(
+        f"\nNode results ({len(sorted_scores)}/{len(toc_nodes)} evaluated):\n"
+    )
     print_aligned_table(sorted_scores, original_nodes)
     print()
 
@@ -243,7 +292,7 @@ async def analyze_peripheral_nodes(root_nodes: list, copilot_session=None):
 # --- 6. PARAMETER HANDLING ---
 async def main():
     parser = argparse.ArgumentParser(
-        description="Classify root nodes from a YAML file by their relevance to ARM peripherals."
+        description="Classify TOC nodes from a YAML file by their relevance to ARM peripherals."
     )
     parser.add_argument(
         "--yaml",
@@ -260,24 +309,24 @@ async def main():
     with open(args.yaml_path, "r", encoding="utf-8") as f:
         toc_data = yaml.safe_load(f)
 
-    root_nodes = extract_root_nodes(toc_data)
+    toc_nodes = extract_toc_nodes(toc_data)
 
-    if not root_nodes:
-        print(f"Error: No root nodes found under the 'sections' key in YAML file '{args.yaml_path}'.")
+    if not toc_nodes:
+        print(f"Error: No TOC nodes found under the 'sections' key in YAML file '{args.yaml_path}'.")
         sys.exit(1)
 
     print(
-        f"Extracted {len(root_nodes)} root nodes from '{args.yaml_path}'. "
-        f"Analyzing in batches of {BATCH_SIZE}..."
+        f"Extracted {len(toc_nodes)} nodes from '{args.yaml_path}'. "
+        "Sending one request per node..."
     )
     if LLM_PROVIDER == "copilot":
         from copilot import CopilotClient
 
         async with CopilotClient() as copilot_client:
             async with await copilot_client.create_session(model=MODEL_NAME) as copilot_session:
-                await analyze_peripheral_nodes(root_nodes, copilot_session)
+                await analyze_peripheral_nodes(toc_nodes, copilot_session)
     else:
-        await analyze_peripheral_nodes(root_nodes)
+        await analyze_peripheral_nodes(toc_nodes)
 
 
 if __name__ == "__main__":

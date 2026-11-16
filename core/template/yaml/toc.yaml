@@ -10,7 +10,7 @@ sections:
       - id: 0
         confidence: 0.0
     children: 
-      -id: 0
+      - id: 0
        title: ''
        number: ''
        span_start: 0

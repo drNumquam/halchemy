@@ -1,72 +1,72 @@
 # yaml-language-server: $schema=./schema.yaml
-source: "documents/annual_financial_report_2025.pdf"
-pages: 48
+source: "documents/technical_specification_v2.pdf"
+pages: 32
 sections:
   - id: 1
-    title: "Executive Summary"
+    title: "Introduction and Scope"
     number: "1"
-    span_start: 0
-    span_end: 2450
+    span_start: 1
+    span_end: 4
     references:
-      - id: 101
-        confidence: 0.98
-      - id: 102
-        confidence: 0.91
+      - id: 6
+        confidence: 0.95
     children: []
 
   - id: 2
-    title: "Market Analysis and Performance"
+    title: "System Architecture"
     number: "2"
-    span_start: 2451
-    span_end: 14200
+    span_start: 5
+    span_end: 24
     references:
-      - id: 103
-        confidence: 0.95
+      - id: 1
+        confidence: 0.91
+      - id: 7
+        confidence: 0.87
     children:
       - id: 3
-        title: "Regional Revenue Breakdown"
+        title: "Core Components"
         number: "2.1"
-        span_start: 2600
-        span_end: 8400
+        span_start: 6
+        span_end: 15
         references:
-          - id: 104
-            confidence: 0.89
-          - id: 105
-            confidence: 0.76
+          - id: 6
+            confidence: 0.93
         children:
           - id: 4
-            title: "European Union Market"
+            title: "Data Ingestion Engine"
             number: "2.1.1"
-            span_start: 2850
-            span_end: 5600
+            span_start: 7
+            span_end: 11
             references:
-              - id: 106
-                confidence: 0.94
+              - id: 5
+                confidence: 0.98
             children: []
           - id: 5
-            title: "North American Market"
+            title: "Validation Pipeline"
             number: "2.1.2"
-            span_start: 5601
-            span_end: 8400
-            references: []
+            span_start: 12
+            span_end: 15
+            references:
+              - id: 4
+                confidence: 0.96
             children: []
 
       - id: 6
-        title: "Key Risk Factors"
+        title: "Security and Compliance"
         number: "2.2"
-        span_start: 8401
-        span_end: 14200
-        references:
-          - id: 107
-            confidence: 0.99
+        span_start: 16
+        span_end: 24
+        references: []
         children: []
 
   - id: 7
-    title: "Future Outlook and Strategy"
+    title: "Deployment Guidelines"
     number: "3"
-    span_start: 14201
-    span_end: 19850
+    span_start: 25
+    span_end: 32
     references:
-      - id: 108
-        confidence: 0.87
+      - id: 2
+        confidence: 0.89
+      - id: 6
+        confidence: 0.94
     children: []

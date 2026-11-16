@@ -34,7 +34,6 @@ else:
 
 
 # --- 2. EXTRACT ALL NODES FROM THE YAML FILE ---
-# --- 2. EXTRACT ALL NODES FROM THE YAML FILE ---
 def extract_toc_nodes(toc_data: dict) -> list:
     sections = toc_data.get("sections", [])
     toc_nodes = []

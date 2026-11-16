@@ -1,0 +1,9 @@
+Input PDF: doc/ARM/arm_cortex_r82_processor_trm_102670_0101_02_en.pdf
+Output directory: BA
+Created TOC file: BA/toc.yaml
+PDF pages: 2039
+Usable TOC entries: 1312
+Page indexes are zero-based physical PDF indexes; end_index is inclusive.
+Validation passed: toc.yaml is valid against the specified schema.
+Process completed successfully.
+Process finished with exit code 0.

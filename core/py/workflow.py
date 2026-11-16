@@ -1,57 +1,77 @@
 import argparse
+import asyncio
 import os
 import re
 import sys
 import yaml
-import httpx2 as httpx
-from openai import OpenAI
 
-# --- 1. CONFIGURAZIONE CLIENT LM STUDIO ---
-client = OpenAI(
-    base_url="http://localhost:1234/v1",
-    api_key="lm-studio",
-    timeout=600.0,
-    http_client=httpx.Client(trust_env=False, timeout=600.0)
-)
-MODEL_NAME = "qwen/qwen3.5-9b"
-BATCH_SIZE = 8
+# --- 1. MODEL CONFIGURATION ---
+LLM_PROVIDER = "copilot"  # Set to "qwen" to use the local Qwen model.
+
+QWEN_MODEL_NAME = "qwen/qwen3.5-9b"
+QWEN_BATCH_SIZE = 8
+
+COPILOT_MODEL_NAME = "auto"
+COPILOT_BATCH_SIZE = 8
+
+client = None
+if LLM_PROVIDER == "qwen":
+    import httpx2 as httpx
+    from openai import OpenAI
+
+    client = OpenAI(
+        base_url="http://localhost:1234/v1",
+        api_key="lm-studio",
+        timeout=600.0,
+        http_client=httpx.Client(trust_env=False, timeout=600.0)
+    )
+    MODEL_NAME = QWEN_MODEL_NAME
+    BATCH_SIZE = QWEN_BATCH_SIZE
+elif LLM_PROVIDER == "copilot":
+    MODEL_NAME = COPILOT_MODEL_NAME
+    BATCH_SIZE = COPILOT_BATCH_SIZE
+else:
+    raise ValueError(f"Unsupported LLM_PROVIDER: {LLM_PROVIDER}")
 
 
-# --- 2. ESTRAZIONE DEI NODI ROOT DAL FILE YAML ---
-def estrai_nodi_root(toc_data: dict) -> list:
+# --- 2. EXTRACT ROOT NODES FROM THE YAML FILE ---
+def extract_root_nodes(toc_data: dict) -> list:
     sections = toc_data.get("sections", [])
-    nodi_root = []
-    for nodo in sections:
-        if isinstance(nodo, dict) and "id" in nodo and "title" in nodo:
-            start_idx = nodo.get("start_index")
-            end_idx = nodo.get("end_index")
+    root_nodes = []
+    for node in sections:
+        if isinstance(node, dict) and "id" in node and "title" in node:
+            start_index = node.get("start_index")
+            end_index = node.get("end_index")
 
-            if start_idx is not None and end_idx is not None:
-                pagine_str = f"{start_idx} - {end_idx}" if start_idx != end_idx else f"{start_idx}"
-            elif start_idx is not None:
-                pagine_str = str(start_idx)
+            if start_index is not None and end_index is not None:
+                pages_text = f"{start_index} - {end_index}" if start_index != end_index else f"{start_index}"
+            elif start_index is not None:
+                pages_text = str(start_index)
             else:
-                pagine_str = "N/A"
+                pages_text = "N/A"
 
-            nodi_root.append({
-                "id": nodo["id"],
-                "title": nodo["title"],
-                "pages": pagine_str
+            root_nodes.append({
+                "id": node["id"],
+                "title": node["title"],
+                "pages": pages_text
             })
-    return nodi_root
+    return root_nodes
 
 
-# --- 3. CHIAMATA LLM E PARSING ---
-def chiama_llm(system_prompt: str, nodi_batch: list) -> str:
-    payload_llm = [{"id": n["id"], "title": n["title"]} for n in nodi_batch]
-    nodi_yaml_str = yaml.dump(payload_llm, allow_unicode=True, sort_keys=False)
+# --- 3. LLM CALL AND RESPONSE PARSING ---
+def call_qwen_llm(system_prompt: str, node_batch: list) -> str:
+    llm_payload = [{"id": node["id"], "title": node["title"]} for node in node_batch]
+    nodes_yaml = yaml.dump(llm_payload, allow_unicode=True, sort_keys=False)
+
+    if client is None:
+        raise RuntimeError("The Qwen client is not configured.")
 
     try:
         response = client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Evaluate these {len(payload_llm)} nodes:\n\n{nodi_yaml_str}"}
+                {"role": "user", "content": f"Please evaluate the following {len(llm_payload)} nodes:\n\n{nodes_yaml}"}
             ],
             temperature=0.1,
             max_tokens=4096,
@@ -63,7 +83,7 @@ def chiama_llm(system_prompt: str, nodi_batch: list) -> str:
             model=MODEL_NAME,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Evaluate these {len(payload_llm)} nodes:\n\n{nodi_yaml_str}"}
+                {"role": "user", "content": f"Please evaluate the following {len(llm_payload)} nodes:\n\n{nodes_yaml}"}
             ],
             temperature=0.1,
             max_tokens=4096,
@@ -71,51 +91,89 @@ def chiama_llm(system_prompt: str, nodi_batch: list) -> str:
         )
 
     first_choice, *_ = response.choices
-    contenuto = first_choice.message.content or ""
-    return re.sub(r"<think>.*?</think>", "", contenuto, flags=re.DOTALL).strip()
+    content = first_choice.message.content or ""
+    return re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
 
 
-def estrai_punteggi(contenuto_llm: str, mappa_originali: dict) -> dict:
-    punteggi = {}
-    for riga in contenuto_llm.splitlines():
-        match = re.match(r"^\|\s*(\d+)\s*\|.*?\|\s*([0-9]*\.?[0-9]+)\s*\|$", riga.strip())
+async def call_llm(
+    system_prompt: str,
+    node_batch: list,
+    copilot_session=None,
+) -> str:
+    if LLM_PROVIDER == "qwen":
+        return call_qwen_llm(system_prompt, node_batch)
+
+    if copilot_session is None:
+        raise RuntimeError("The GitHub Copilot session has not been initialized.")
+
+    llm_payload = [{"id": node["id"], "title": node["title"]} for node in node_batch]
+    nodes_yaml = yaml.dump(llm_payload, allow_unicode=True, sort_keys=False)
+    prompt = (
+        f"{system_prompt}\n\n"
+        f"Please evaluate the following {len(llm_payload)} nodes:\n\n{nodes_yaml}"
+    )
+    response = await copilot_session.send_and_wait(prompt)
+    if response is None or not response.data.content:
+        raise RuntimeError("GitHub Copilot returned no content.")
+
+    return re.sub(
+        r"<think>.*?</think>",
+        "",
+        response.data.content,
+        flags=re.DOTALL,
+    ).strip()
+
+
+def extract_scores(llm_content: str, original_nodes: dict) -> dict:
+    scores = {}
+    for line in llm_content.splitlines():
+        match = re.match(r"^\|\s*(\d+)\s*\|.*?\|\s*([0-9]*\.?[0-9]+)\s*\|$", line.strip())
         if match:
             node_id, score = match.group(1), float(match.group(2))
-            if node_id in mappa_originali:
-                punteggi[node_id] = score
-    return punteggi
+            if node_id in original_nodes:
+                scores[node_id] = score
+    return scores
 
 
-# --- 4. FORMATTAZIONE TABELLA ALLINEATA VERTICALMENTE ---
-def stampa_tabella_allineata(ordinati: list, mappa_originali: dict):
-    h_id, h_title, h_pages, h_conf = "Node ID", "Title", "Pages", "Confidence"
-    righe = []
+# --- 4. VERTICALLY ALIGNED TABLE FORMATTING ---
+def print_aligned_table(sorted_scores: list, original_nodes: dict):
+    id_header, title_header, pages_header, confidence_header = (
+        "Node ID",
+        "Title",
+        "Pages",
+        "Confidence",
+    )
+    rows = []
 
-    for node_id, score in ordinati:
-        info = mappa_originali[node_id]
-        righe.append((
+    for node_id, score in sorted_scores:
+        node_info = original_nodes[node_id]
+        rows.append((
             str(node_id),
-            info["title"],
-            info["pages"],
+            node_info["title"],
+            node_info["pages"],
             f"{score:.2f}"
         ))
 
-    col_id, col_title, col_pages, col_conf = zip(*righe)
+    id_column, title_column, pages_column, confidence_column = zip(*rows)
 
-    w_id = max(len(h_id), *(len(x) for x in col_id), 4)
-    w_title = max(len(h_title), *(len(x) for x in col_title), 4)
-    w_pages = max(len(h_pages), *(len(x) for x in col_pages), 4)
-    w_conf = max(len(h_conf), *(len(x) for x in col_conf), 4)
+    id_width = max(len(id_header), *(len(value) for value in id_column), 4)
+    title_width = max(len(title_header), *(len(value) for value in title_column), 4)
+    pages_width = max(len(pages_header), *(len(value) for value in pages_column), 4)
+    confidence_width = max(
+        len(confidence_header),
+        *(len(value) for value in confidence_column),
+        4,
+    )
 
-    print(f"| {h_id.ljust(w_id)} | {h_title.ljust(w_title)} | {h_pages.center(w_pages)} | {h_conf.center(w_conf)} |")
-    print(f"| :{'-' * (w_id - 1)} | :{'-' * (w_title - 1)} | :{'-' * (w_pages - 2)}: | :{'-' * (w_conf - 2)}: |")
+    print(f"| {id_header.ljust(id_width)} | {title_header.ljust(title_width)} | {pages_header.center(pages_width)} | {confidence_header.center(confidence_width)} |")
+    print(f"| :{'-' * (id_width - 1)} | :{'-' * (title_width - 1)} | :{'-' * (pages_width - 2)}: | :{'-' * (confidence_width - 2)}: |")
 
-    for r_id, r_title, r_pages, r_conf in righe:
-        print(f"| {r_id.ljust(w_id)} | {r_title.ljust(w_title)} | {r_pages.center(w_pages)} | {r_conf.center(w_conf)} |")
+    for row_id, row_title, row_pages, row_confidence in rows:
+        print(f"| {row_id.ljust(id_width)} | {row_title.ljust(title_width)} | {row_pages.center(pages_width)} | {row_confidence.center(confidence_width)} |")
 
 
-# --- 5. ANALISI A BATCH CON VERIFICA COMPLETA ---
-def analizza_nodi_periferiche(nodi_root: list):
+# --- 5. BATCH ANALYSIS WITH COMPLETE VALIDATION ---
+async def analyze_peripheral_nodes(root_nodes: list, copilot_session=None):
     system_prompt = (
         "You are an expert in embedded architectures, ARM processors, and microcontrollers. "
         "You will be given a small batch of root nodes (id and title) from an ARM Technical Reference Manual.\n\n"
@@ -134,78 +192,93 @@ def analizza_nodi_periferiche(nodi_root: list):
         "- No introductory or concluding text."
     )
 
-    mappa_originali = {
-        str(n["id"]): {"title": n["title"], "pages": n["pages"]}
-        for n in nodi_root
+    original_nodes = {
+        str(node["id"]): {"title": node["title"], "pages": node["pages"]}
+        for node in root_nodes
     }
-    punteggi_totali = {}
+    total_scores = {}
 
-    totale_batch = (len(nodi_root) + BATCH_SIZE - 1) // BATCH_SIZE
-    for idx in range(0, len(nodi_root), BATCH_SIZE):
-        batch = nodi_root[idx:idx + BATCH_SIZE]
-        num_batch = (idx // BATCH_SIZE) + 1
-        print(f"  Elaborazione batch {num_batch}/{totale_batch} ({len(batch)} nodi)...")
+    total_batches = (len(root_nodes) + BATCH_SIZE - 1) // BATCH_SIZE
+    for batch_start in range(0, len(root_nodes), BATCH_SIZE):
+        batch = root_nodes[batch_start:batch_start + BATCH_SIZE]
+        batch_number = (batch_start // BATCH_SIZE) + 1
+        print(f"  Processing batch {batch_number}/{total_batches} ({len(batch)} nodes)...")
 
-        output_llm = chiama_llm(system_prompt, batch)
-        punteggi_batch = estrai_punteggi(output_llm, mappa_originali)
-        punteggi_totali.update(punteggi_batch)
+        llm_output = await call_llm(system_prompt, batch, copilot_session)
+        batch_scores = extract_scores(llm_output, original_nodes)
+        total_scores.update(batch_scores)
 
-    tentativi_recupero = 0
-    while len(punteggi_totali) < len(nodi_root) and tentativi_recupero < 2:
-        tentativi_recupero += 1
-        mancanti = [n for n in nodi_root if str(n["id"]) not in punteggi_totali]
-        print(f"  Recupero mirato per {len(mancanti)} nodi mancanti...")
-        output_llm = chiama_llm(system_prompt, mancanti)
-        punteggi_totali.update(estrai_punteggi(output_llm, mappa_originali))
+    recovery_attempts = 0
+    while len(total_scores) < len(root_nodes) and recovery_attempts < 2:
+        recovery_attempts += 1
+        missing_nodes = [node for node in root_nodes if str(node["id"]) not in total_scores]
+        print(f"  Retrying for {len(missing_nodes)} missing nodes...")
+        llm_output = await call_llm(system_prompt, missing_nodes, copilot_session)
+        total_scores.update(extract_scores(llm_output, original_nodes))
 
-    # Ordina prima per Confidence (decrescente) e a parità di punteggio per Node ID (crescente)
-    ordinati = sorted(
-        punteggi_totali.items(),
-        key=lambda item: (-item.pop() if False else 0)  # placeholder ignorato
+    # Sort by descending confidence, then by ascending node ID to break ties.
+    sorted_scores = sorted(
+        total_scores.items(),
+        key=lambda item: (-item.pop() if False else 0)  # unused placeholder
     )
-    ordinati = [
-        (nid, score)
-        for score, nid in sorted(
-            ((score, int(nid)) for nid, score in punteggi_totali.items()),
+    sorted_scores = [
+        (node_id, score)
+        for score, node_id in sorted(
+            ((score, int(node_id)) for node_id, score in total_scores.items()),
             key=lambda x: (-x.real if isinstance(x, float) else 0)
         )
     ]
-    # Costruzione ordinamento pulito senza indici: (score decrescente, id crescente)
-    coppie_ordinate = sorted(
-        ((score, int(nid), nid) for nid, score in punteggi_totali.items()),
-        key=lambda t: (-t[0], t[1])
+    # Build the final ordering: descending score, then ascending node ID.
+    sorted_pairs = sorted(
+        ((score, int(node_id), node_id) for node_id, score in total_scores.items()),
+        key=lambda pair: (-pair[0], pair[1])
     )
-    ordinati = [(nid, score) for score, _, nid in coppie_ordinate]
+    sorted_scores = [(node_id, score) for score, _, node_id in sorted_pairs]
 
-    print(f"\nRisultato analisi ({len(ordinati)}/{len(nodi_root)} nodi valutati):\n")
-    stampa_tabella_allineata(ordinati, mappa_originali)
+    print(f"\nAnalysis result ({len(sorted_scores)}/{len(root_nodes)} nodes evaluated):\n")
+    print_aligned_table(sorted_scores, original_nodes)
     print()
 
 
-# --- 6. GESTIONE PARAMETRI ---
-def main():
+# --- 6. PARAMETER HANDLING ---
+async def main():
     parser = argparse.ArgumentParser(
-        description="Classifica i nodi root di un file YAML in base alla pertinenza con le periferiche ARM."
+        description="Classify root nodes from a YAML file by their relevance to ARM peripherals."
     )
-    parser.add_argument("yaml", help="Percorso del file toc.yaml contenente l'indice")
+    parser.add_argument(
+        "--yaml",
+        dest="yaml_path",
+        required=True,
+        help="Path to the toc.yaml file containing the table of contents",
+    )
     args = parser.parse_args()
 
-    if not os.path.isfile(args.yaml):
-        print(f"Errore: Il file YAML '{args.yaml}' non esiste.")
+    if not os.path.isfile(args.yaml_path):
+        print(f"Error: YAML file '{args.yaml_path}' does not exist.")
         sys.exit(1)
 
-    with open(args.yaml, "r", encoding="utf-8") as f:
+    with open(args.yaml_path, "r", encoding="utf-8") as f:
         toc_data = yaml.safe_load(f)
 
-    nodi_root = estrai_nodi_root(toc_data)
+    root_nodes = extract_root_nodes(toc_data)
 
-    if not nodi_root:
-        print("Errore: Nessun nodo root trovato sotto la chiave 'sections' nel file YAML.")
+    if not root_nodes:
+        print(f"Error: No root nodes found under the 'sections' key in YAML file '{args.yaml_path}'.")
         sys.exit(1)
 
-    print(f"Estratti {len(nodi_root)} nodi root da '{args.yaml}'. Analisi in corso a batch di {BATCH_SIZE}...")
-    analizza_nodi_periferiche(nodi_root)
+    print(
+        f"Extracted {len(root_nodes)} root nodes from '{args.yaml_path}'. "
+        f"Analyzing in batches of {BATCH_SIZE}..."
+    )
+    if LLM_PROVIDER == "copilot":
+        from copilot import CopilotClient
+
+        async with CopilotClient() as copilot_client:
+            async with await copilot_client.create_session(model=MODEL_NAME) as copilot_session:
+                await analyze_peripheral_nodes(root_nodes, copilot_session)
+    else:
+        await analyze_peripheral_nodes(root_nodes)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

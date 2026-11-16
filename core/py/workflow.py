@@ -3,6 +3,7 @@ import asyncio
 import os
 import re
 import sys
+from contextlib import AsyncExitStack
 import yaml
 
 # --- 1. MODEL CONFIGURATION ---
@@ -11,6 +12,7 @@ LLM_PROVIDER = "copilot"  # Set to "qwen" to use the local Qwen model.
 QWEN_MODEL_NAME = "qwen/qwen3.5-9b"
 
 COPILOT_MODEL_NAME = "auto"
+MAX_CONCURRENT_REQUESTS = 4
 
 client = None
 if LLM_PROVIDER == "qwen":
@@ -136,7 +138,7 @@ async def call_llm(
     copilot_session=None,
 ) -> str:
     if LLM_PROVIDER == "qwen":
-        return call_qwen_llm(system_prompt, node)
+        return await asyncio.to_thread(call_qwen_llm, system_prompt, node)
 
     if copilot_session is None:
         raise RuntimeError("The GitHub Copilot session has not been initialized.")
@@ -217,7 +219,7 @@ def print_aligned_table(sorted_scores: list, original_nodes: dict):
 
 
 # --- 5. PER-NODE ANALYSIS WITH COMPLETE VALIDATION ---
-async def analyze_peripheral_nodes(toc_nodes: list, copilot_session=None):
+async def analyze_peripheral_nodes(toc_nodes: list, copilot_sessions=None):
     system_prompt = (
         "You are an expert in embedded architectures, ARM processors, and microcontrollers. "
         "You will be given exactly one TOC node (id and title) from an ARM Technical Reference Manual per request.\n\n"
@@ -246,13 +248,47 @@ async def analyze_peripheral_nodes(toc_nodes: list, copilot_session=None):
     }
     total_scores = {}
 
-    for node_number, node in enumerate(toc_nodes, start=1):
-        node_id = str(node["id"])
-        print(f"  Processing node {node_number}/{len(toc_nodes)} (ID {node_id})...")
-        llm_output = await call_llm(system_prompt, node, copilot_session)
-        total_scores.update(
-            extract_scores(llm_output, {node_id: original_nodes[node_id]})
+    async def score_nodes(nodes: list, attempt=None) -> dict:
+        if not nodes:
+            return {}
+
+        worker_count = min(MAX_CONCURRENT_REQUESTS, len(nodes))
+        worker_scores = {}
+
+        async def worker(worker_number: int) -> None:
+            session = (
+                copilot_sessions[worker_number]
+                if copilot_sessions is not None
+                else None
+            )
+            for node_index in range(worker_number, len(nodes), worker_count):
+                node = nodes[node_index]
+                node_id = str(node["id"])
+                if attempt is None:
+                    print(
+                        f"  Processing node {node_index + 1}/{len(nodes)} "
+                        f"(ID {node_id})..."
+                    )
+                else:
+                    print(
+                        f"  Retry {attempt}/2 for node ID {node_id}: "
+                        "no valid score was returned."
+                    )
+
+                llm_output = await call_llm(system_prompt, node, session)
+                worker_scores.update(
+                    extract_scores(
+                        llm_output,
+                        {node_id: original_nodes[node_id]},
+                    )
+                )
+
+        await asyncio.gather(
+            *(worker(worker_number) for worker_number in range(worker_count))
         )
+        return worker_scores
+
+    total_scores.update(await score_nodes(toc_nodes))
 
     for attempt in range(1, 3):
         missing_nodes = [
@@ -261,16 +297,7 @@ async def analyze_peripheral_nodes(toc_nodes: list, copilot_session=None):
         if not missing_nodes:
             break
 
-        for node in missing_nodes:
-            node_id = str(node["id"])
-            print(
-                f"  Retry {attempt}/2 for node ID {node_id}: "
-                "no valid score was returned."
-            )
-            llm_output = await call_llm(system_prompt, node, copilot_session)
-            total_scores.update(
-                extract_scores(llm_output, {node_id: original_nodes[node_id]})
-            )
+        total_scores.update(await score_nodes(missing_nodes, attempt))
 
     # Sort by descending confidence, then by ascending node ID to break ties.
     sorted_pairs = sorted(
@@ -317,14 +344,21 @@ async def main():
 
     print(
         f"Extracted {len(toc_nodes)} nodes from '{args.yaml_path}'. "
-        "Sending one request per node..."
+        f"Sending one request per node with up to {MAX_CONCURRENT_REQUESTS} concurrent workers..."
     )
     if LLM_PROVIDER == "copilot":
         from copilot import CopilotClient
 
         async with CopilotClient() as copilot_client:
-            async with await copilot_client.create_session(model=MODEL_NAME) as copilot_session:
-                await analyze_peripheral_nodes(toc_nodes, copilot_session)
+            async with AsyncExitStack() as session_stack:
+                session_count = min(MAX_CONCURRENT_REQUESTS, len(toc_nodes))
+                copilot_sessions = [
+                    await session_stack.enter_async_context(
+                        await copilot_client.create_session(model=MODEL_NAME)
+                    )
+                    for _ in range(session_count)
+                ]
+                await analyze_peripheral_nodes(toc_nodes, copilot_sessions)
     else:
         await analyze_peripheral_nodes(toc_nodes)
 

@@ -48,6 +48,7 @@ import logging
 import os
 import re
 import sys
+import jsonschema
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
 from pathlib import Path

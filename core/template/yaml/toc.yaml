@@ -11,11 +11,11 @@ sections:
         confidence: 0.0
     children: 
       - id: 0
-       title: ''
-       number: ''
-       span_start: 0
-       span_end: 0
-       references:
-         - id: 0
-           confidence: 0.0
-       children: []
+        title: ''
+        number: ''
+        span_start: 0
+        span_end: 0
+        references:
+          - id: 0
+            confidence: 0.0
+        children: []

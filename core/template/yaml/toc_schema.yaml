@@ -61,11 +61,11 @@ $defs:
       span_start:
         type: integer
         minimum: 0
-        description: Starting character or token offset of the section.
+        description: Starting page of the section.
       span_end:
         type: integer
         minimum: 0
-        description: Ending character or token offset of the section.
+        description: Ending page of the section including all children sections.
       references:
         type: array
         items:

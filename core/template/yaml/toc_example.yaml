@@ -1,28 +1,72 @@
-source: 'example.pdf'
-pages: 12
+# yaml-language-server: $schema=./schema.yaml
+source: "documents/annual_financial_report_2025.pdf"
+pages: 48
 sections:
   - id: 1
-    title: 'Introduction'
-    start_index: 0
-    end_index: 4
-    children:
-      - id: 11
-        title: 'Background'
-        start_index: 0
-        end_index: 1
-        children: []
-      - id: 12
-        title: 'Objectives and scope'
-        start_index: 2
-        end_index: 4
-        children: []
-  - id: 2
-    title: 'Methodology'
-    start_index: 5
-    end_index: 8
+    title: "Executive Summary"
+    number: "1"
+    span_start: 0
+    span_end: 2450
+    references:
+      - id: 101
+        confidence: 0.98
+      - id: 102
+        confidence: 0.91
     children: []
-  - id: 3
-    title: 'Conclusion'
-    start_index: 9
-    end_index: 11
+
+  - id: 2
+    title: "Market Analysis and Performance"
+    number: "2"
+    span_start: 2451
+    span_end: 14200
+    references:
+      - id: 103
+        confidence: 0.95
+    children:
+      - id: 3
+        title: "Regional Revenue Breakdown"
+        number: "2.1"
+        span_start: 2600
+        span_end: 8400
+        references:
+          - id: 104
+            confidence: 0.89
+          - id: 105
+            confidence: 0.76
+        children:
+          - id: 4
+            title: "European Union Market"
+            number: "2.1.1"
+            span_start: 2850
+            span_end: 5600
+            references:
+              - id: 106
+                confidence: 0.94
+            children: []
+          - id: 5
+            title: "North American Market"
+            number: "2.1.2"
+            span_start: 5601
+            span_end: 8400
+            references: []
+            children: []
+
+      - id: 6
+        title: "Key Risk Factors"
+        number: "2.2"
+        span_start: 8401
+        span_end: 14200
+        references:
+          - id: 107
+            confidence: 0.99
+        children: []
+
+  - id: 7
+    title: "Future Outlook and Strategy"
+    number: "3"
+    span_start: 14201
+    span_end: 19850
+    references:
+      - id: 108
+        confidence: 0.87
     children: []

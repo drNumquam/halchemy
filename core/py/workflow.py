@@ -34,6 +34,7 @@ else:
 
 
 # --- 2. EXTRACT ALL NODES FROM THE YAML FILE ---
+# --- 2. EXTRACT ALL NODES FROM THE YAML FILE ---
 def extract_toc_nodes(toc_data: dict) -> list:
     sections = toc_data.get("sections", [])
     toc_nodes = []
@@ -45,17 +46,17 @@ def extract_toc_nodes(toc_data: dict) -> list:
 
             children = node.get("children", [])
             if "id" in node and "title" in node:
-                start_index = node.get("start_index")
-                end_index = node.get("end_index")
+                start_index = node.get("span_start")
+                end_index = node.get("span_end")
                 text_end_before = None
 
                 if (
                     isinstance(children, list)
                     and children
                     and isinstance(children[0], dict)
-                    and children[0].get("start_index") is not None
+                    and children[0].get("span_start") is not None
                 ):
-                    end_index = children[0]["start_index"]
+                    end_index = children[0]["span_start"]
                     text_end_before = children[0].get("title")
 
                 if start_index is not None and end_index is not None:
@@ -71,9 +72,11 @@ def extract_toc_nodes(toc_data: dict) -> list:
 
                 toc_nodes.append({
                     "id": node["id"],
+                    "number": node.get("number", ""),
                     "title": node["title"],
                     "pages": pages_text,
                     "text_end_before": text_end_before,
+                    "references": node.get("references", []),
                 })
 
             if isinstance(children, list):

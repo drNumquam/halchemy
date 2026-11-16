@@ -3,11 +3,19 @@ pages: 0
 sections:
   - id: 0
     title: ''
-    start_index: 0
-    end_index: 0
+    number: ''
+    span_start: 0
+    span_end: 0
+    references:
+      - id: 0
+        confidence: 0.0
     children: 
       -id: 0
        title: ''
-       start_index: 0
-       end_index: 0
+       number: ''
+       span_start: 0
+       span_end: 0
+       references:
+         - id: 0
+           confidence: 0.0
        children: []

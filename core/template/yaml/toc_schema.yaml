@@ -33,7 +33,7 @@ $defs:
       id:
         type: integer
         minimum: 0
-        description: Unique identifier of the reference.
+        description: Referred section id.
       confidence:
         type: number
         minimum: 0.0

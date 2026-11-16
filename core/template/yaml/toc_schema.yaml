@@ -1,52 +1,87 @@
-$schema: 'https://json-schema.org/draft/2020-12/schema'
-$title: 'Table of Contents (TOC)'
-$comment: 'JSON Schema in YAML for validating toc.yaml data.'
+# JSON Schema (Draft 2020-12) for Document Structure Validation
+$schema: https://json-schema.org
+title: Document Structure Schema
+description: Validation schema for the hierarchical structure of document sections and references.
 type: object
-additionalProperties: false
+
+properties:
+  source:
+    type: string
+    description: Source identifier or file path of the document.
+  pages:
+    type: integer
+    minimum: 0
+    description: Total number of pages in the document.
+  sections:
+    type: array
+    items:
+      $ref: '#/$defs/section'
+    description: List of top-level sections in the document.
+
 required:
   - source
   - pages
   - sections
-properties:
-  source:
-    type: string
-    description: 'Source PDF filename or path.'
-  pages:
-    type: integer
-    minimum: 0
-    description: 'Total number of pages in the source PDF.'
-  sections:
-    type: array
-    description: 'Top-level sections in the document.'
-    items:
-      $ref: '#/$defs/section'
+additionalProperties: false
+
+# Reusable schema definitions
 $defs:
-  section:
+  reference:
     type: object
-    additionalProperties: false
-    required:
-      - id
-      - title
-      - start_index
-      - end_index
-      - children
+    description: A reference linked to a section with an associated confidence score.
     properties:
       id:
         type: integer
-        description: 'Integer identifier of this node or section.'
+        minimum: 0
+        description: Unique identifier of the reference.
+      confidence:
+        type: number
+        minimum: 0.0
+        maximum: 1.0
+        description: Confidence score of the reference match, ranging from 0.0 to 1.0.
+    required:
+      - id
+      - confidence
+    additionalProperties: false
+
+  section:
+    type: object
+    description: A document section node that can contain nested child sections.
+    properties:
+      id:
+        type: integer
+        minimum: 0
+        description: Unique identifier of the section.
       title:
         type: string
-        description: 'Title of the section.'
-      start_index:
+        description: Title or heading text of the section.
+      number:
+        type: string
+        description: Section numbering label (e.g., '1.1', 'A.2').
+      span_start:
         type: integer
         minimum: 0
-        description: 'Absolute or physical page index where the section starts.'
-      end_index:
+        description: Starting character or token offset of the section.
+      span_end:
         type: integer
         minimum: 0
-        description: 'Absolute or physical page index where the section ends.'
+        description: Ending character or token offset of the section.
+      references:
+        type: array
+        items:
+          $ref: '#/$defs/reference'
+        description: List of references associated with this section.
       children:
         type: array
-        description: 'Nested sections with the same structure as their parent.'
         items:
           $ref: '#/$defs/section'
+        description: Nested subsections following the same section structure.
+    required:
+      - id
+      - title
+      - number
+      - span_start
+      - span_end
+      - references
+      - children
+    additionalProperties: false

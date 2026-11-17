@@ -8,7 +8,7 @@ Processing pipeline:
 PDF
   -> bookmark extraction
   -> TOC hierarchy generation
-  -> page span calculation
+  -> cross-references enrichment
   -> schema validation
   -> toc.yaml
 

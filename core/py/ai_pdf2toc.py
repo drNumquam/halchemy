@@ -91,6 +91,7 @@ Examples:
     python ai_pdf2toc.py --pdf manual.pdf -o out --schema schema.yaml \
         --provider qwen --model "qwen/qwen3.5-9b" --concurrency 2 \
         --context "ARM Cortex-R Technical Reference Manual"
+    python3 ai_pdf2toc.py --pdf arm_cortex_r82_processor_trm_102670_0101_02_en.pdf -o . --provider qwen --model "qwen/qwen3.5-9b" --base-url "http://127.0.0.1:1234/v1" --concurrency 4
 
 Requirements:
     python -m pip install pymupdf

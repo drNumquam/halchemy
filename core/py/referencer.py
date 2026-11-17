@@ -73,8 +73,6 @@ def extract_toc_nodes(toc_data: dict) -> list:
                     "id": node["id"],
                     "number": node.get("number", ""),
                     "title": node["title"],
-                    "pages": pages_text,
-                    "text_end_before": text_end_before,
                     "references": node.get("references", []),
                 })
 
@@ -87,17 +85,49 @@ def extract_toc_nodes(toc_data: dict) -> list:
 
 
 # --- 3. LLM CALL AND RESPONSE PARSING ---
-def build_node_prompt(node: dict) -> str:
-    node_yaml = yaml.dump(
-        {"id": node["id"], "title": node["title"]},
+def build_node_prompt(node: dict, all_nodes: list) -> str:
+
+    payload = {
+        "target": {
+            "id": node["id"],
+            "title": node["title"]
+        },
+        "all_nodes": [
+            {
+                "id": n["id"],
+                "title": n["title"]
+            }
+            for n in all_nodes
+        ]
+    }
+
+    return yaml.dump(
+        payload,
         allow_unicode=True,
-        sort_keys=False,
+        sort_keys=False
     )
-    return (
-        "Evaluate this single TOC node for how likely its title is to indicate "
-        "information about ARM peripherals. Score only this node.\n\n"
-        f"Node:\n{node_yaml}"
-    )
+
+
+
+def build_yaml_node_map(toc_data):
+
+    node_map = {}
+
+    def visit(nodes):
+
+        for node in nodes:
+
+            node_map[str(node["id"])] = node
+
+            children = node.get("children", [])
+
+            if children:
+                visit(children)
+
+    visit(toc_data["sections"])
+
+    return node_map
+
 
 
 def call_qwen_llm(system_prompt: str, node: dict) -> str:
@@ -136,17 +166,21 @@ def call_qwen_llm(system_prompt: str, node: dict) -> str:
 
 
 async def call_llm(
-    system_prompt: str,
-    node: dict,
-    copilot_session=None,
-) -> str:
+    system_prompt,
+    node,
+    all_nodes,
+    copilot_session=None
+):
     if LLM_PROVIDER == "qwen":
         return await asyncio.to_thread(call_qwen_llm, system_prompt, node)
 
     if copilot_session is None:
         raise RuntimeError("The GitHub Copilot session has not been initialized.")
 
-    user_prompt = build_node_prompt(node)
+    user_prompt = build_node_prompt(
+        node,
+        all_nodes
+    )
     response = await copilot_session.send_and_wait(
         f"{system_prompt}\n\n{user_prompt}"
     )
@@ -161,15 +195,18 @@ async def call_llm(
     ).strip()
 
 
-def extract_scores(llm_content: str, original_nodes: dict) -> dict:
-    scores = {}
-    for line in llm_content.splitlines():
-        match = re.match(r"^\|\s*(\d+)\s*\|.*?\|\s*([0-9]*\.?[0-9]+)\s*\|$", line.strip())
-        if match:
-            node_id, score = match.group(1), float(match.group(2))
-            if node_id in original_nodes:
-                scores[node_id] = score
-    return scores
+def extract_references(llm_content: str) -> list:
+    try:
+        data = json.loads(llm_content)
+        refs = data.get("references", [])
+
+        if isinstance(refs, list):
+            return refs
+
+        return []
+
+    except Exception:
+        return []
 
 
 # --- 4. VERTICALLY ALIGNED TABLE FORMATTING ---
@@ -282,7 +319,7 @@ async def analyze_peripheral_nodes(toc_nodes: list, copilot_sessions=None):
         }
         for node in toc_nodes
     }
-    total_scores = {}
+    generated_refs = {}
 
     async def score_nodes(nodes: list, attempt=None) -> dict:
         if not nodes:
@@ -311,13 +348,16 @@ async def analyze_peripheral_nodes(toc_nodes: list, copilot_sessions=None):
                         "no valid score was returned."
                     )
 
-                llm_output = await call_llm(system_prompt, node, session)
-                worker_scores.update(
-                    extract_scores(
-                        llm_output,
-                        {node_id: original_nodes[node_id]},
-                    )
+                llm_output = await call_llm(
+                    system_prompt,
+                    node,
+                    toc_nodes,
+                    session
                 )
+                
+                refs = extract_references(llm_output)
+                
+                generated_refs[str(node["id"])] = refs
 
         await asyncio.gather(
             *(worker(worker_number) for worker_number in range(worker_count))
@@ -328,7 +368,9 @@ async def analyze_peripheral_nodes(toc_nodes: list, copilot_sessions=None):
 
     for attempt in range(1, 3):
         missing_nodes = [
-            node for node in toc_nodes if str(node["id"]) not in total_scores
+            node
+            for node in toc_nodes
+            if str(node["id"]) not in generated_refs
         ]
         if not missing_nodes:
             break
@@ -357,51 +399,167 @@ async def analyze_peripheral_nodes(toc_nodes: list, copilot_sessions=None):
     )
 
 
+def validate_references(
+    refs,
+    current_id,
+    valid_ids
+):
+
+    cleaned = []
+
+    for ref in refs:
+
+        if not isinstance(ref, dict):
+            continue
+
+        ref_id = str(ref.get("id", "")).strip()
+
+        if ref_id == current_id:
+            continue
+
+        if ref_id not in valid_ids:
+            continue
+
+        cleaned.append({
+            "id": ref_id,
+            "type": ref.get("type", "related_to"),
+            "confidence": float(
+                ref.get("confidence", 0.5)
+            )
+        })
+
+    return cleaned
+
+
+
 # --- 6. PARAMETER HANDLING ---
 async def main():
+
     parser = argparse.ArgumentParser(
-        description="Classify TOC nodes from a YAML file by their relevance to ARM peripherals."
+        description=(
+            "Generate references for TOC nodes contained "
+            "in a toc.yaml file."
+        )
     )
+
     parser.add_argument(
         "--yaml",
         dest="yaml_path",
         required=True,
-        help="Path to the toc.yaml file containing the table of contents",
+        help="Path to the toc.yaml file",
     )
+
     args = parser.parse_args()
 
     if not os.path.isfile(args.yaml_path):
-        print(f"Error: YAML file '{args.yaml_path}' does not exist.")
+        print(
+            f"Error: YAML file '{args.yaml_path}' does not exist."
+        )
         sys.exit(1)
 
-    with open(args.yaml_path, "r", encoding="utf-8") as f:
+    with open(
+        args.yaml_path,
+        "r",
+        encoding="utf-8"
+    ) as f:
         toc_data = yaml.safe_load(f)
 
     toc_nodes = extract_toc_nodes(toc_data)
 
     if not toc_nodes:
-        print(f"Error: No TOC nodes found under the 'sections' key in YAML file '{args.yaml_path}'.")
+        print(
+            f"Error: No TOC nodes found under the "
+            f"'sections' key in YAML file "
+            f"'{args.yaml_path}'."
+        )
         sys.exit(1)
 
     print(
-        f"Extracted {len(toc_nodes)} nodes from '{args.yaml_path}'. "
-        f"Sending one request per node with up to {MAX_CONCURRENT_REQUESTS} concurrent workers..."
+        f"Extracted {len(toc_nodes)} nodes from "
+        f"'{args.yaml_path}'."
     )
+
+    #
+    # Generate references using the selected LLM
+    #
     if LLM_PROVIDER == "copilot":
+
         from copilot import CopilotClient
 
         async with CopilotClient() as copilot_client:
+
             async with AsyncExitStack() as session_stack:
-                session_count = min(MAX_CONCURRENT_REQUESTS, len(toc_nodes))
+
+                session_count = min(
+                    MAX_CONCURRENT_REQUESTS,
+                    len(toc_nodes)
+                )
+
                 copilot_sessions = [
                     await session_stack.enter_async_context(
-                        await copilot_client.create_session(model=MODEL_NAME)
+                        await copilot_client.create_session(
+                            model=MODEL_NAME
+                        )
                     )
                     for _ in range(session_count)
                 ]
-                await analyze_peripheral_nodes(toc_nodes, copilot_sessions)
+
+                generated_refs = (
+                    await analyze_peripheral_nodes(
+                        toc_nodes,
+                        copilot_sessions
+                    )
+                )
+
     else:
-        await analyze_peripheral_nodes(toc_nodes)
+
+        generated_refs = (
+            await analyze_peripheral_nodes(
+                toc_nodes
+            )
+        )
+
+    #
+    # Build map of original YAML nodes
+    #
+    node_map = build_yaml_node_map(
+        toc_data
+    )
+
+    valid_ids = set(
+        node_map.keys()
+    )
+
+    #
+    # Update references field
+    #
+    for node_id, refs in generated_refs.items():
+
+        node_map[node_id]["references"] = (
+            validate_references(
+                refs,
+                node_id,
+                valid_ids
+            )
+        )
+
+    #
+    # Save enriched TOC
+    #
+    output_yaml = "toc_with_references.yaml"
+
+    save_yaml(
+        toc_data,
+        output_yaml
+    )
+
+    print(
+        f"\nReferences generated successfully."
+    )
+
+    print(
+        f"Output written to: {output_yaml}"
+    )
 
 
 if __name__ == "__main__":

@@ -1,21 +1,23 @@
 source: ''
 pages: 0
 sections:
-  - id: 0
+  - id: ''
     title: ''
-    number: ''
     span_start: 0
     span_end: 0
+    next: 0
     references:
-      - id: 0
+      - id: ''
+        type: ''
         confidence: 0.0
     children: 
-      - id: 0
+      - id: ''
         title: ''
-        number: ''
         span_start: 0
         span_end: 0
+        next: 0
         references:
           - id: 0
+            type: ''
             confidence: 0.0
         children: []

@@ -71,7 +71,6 @@ def extract_toc_nodes(toc_data: dict) -> list:
 
                 toc_nodes.append({
                     "id": node["id"],
-                    "number": node.get("number", ""),
                     "title": node["title"],
                     "references": node.get("references", []),
                 })
@@ -130,8 +129,15 @@ def build_yaml_node_map(toc_data):
 
 
 
-def call_qwen_llm(system_prompt: str, node: dict) -> str:
-    user_prompt = build_node_prompt(node)
+def call_qwen_llm(
+    system_prompt,
+    node,
+    all_nodes
+):
+    user_prompt = build_node_prompt(
+        node,
+        all_nodes
+    )
 
     if client is None:
         raise RuntimeError("The Qwen client is not configured.")
@@ -314,8 +320,6 @@ async def analyze_peripheral_nodes(toc_nodes: list, copilot_sessions=None):
     original_nodes = {
         str(node["id"]): {
             "title": node["title"],
-            "pages": node["pages"],
-            "text_end_before": node["text_end_before"],
         }
         for node in toc_nodes
     }

@@ -107,6 +107,7 @@ class Section:
     level: int
     start_page: int
     end_page: int = 0
+    next: int = -1
     top_ratio: float | None = None
     title: str = ""
     children: list[Section] = field(default_factory=list)
@@ -346,7 +347,7 @@ def assign_numbers(sections: list[Section], prefix: str = "") -> int:
             section.id = f"{prefix}{position}"
             section.title = section.raw_title
             fallbacks += 1
-        fallbacks += assign_numbers(section.children, prefix=f"{section.number}.")
+        fallbacks += assign_numbers(section.children, prefix=f"{section.id}.")
     return fallbacks
 
 
@@ -424,11 +425,11 @@ def render_yaml(
         pad = " " * indent
         for section in items:
             lines.extend([
-                f"{pad}- id: {section.id}",
+                f"{pad}- id: {quote(section.id)}",
                 f"{pad}  title: {quote(section.title)}",
-                f"{pad}  number: {quote(section.number)}",
                 f"{pad}  span_start: {section.start_page}",
                 f"{pad}  span_end: {section.end_page}",
+                f"{pad}  next: {section.next}",
                 f"{pad}  references: []",
             ])
             if section.children:

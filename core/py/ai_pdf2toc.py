@@ -91,7 +91,6 @@ Examples:
     python ai_pdf2toc.py --pdf manual.pdf -o out --schema schema.yaml \
         --provider qwen --model "qwen/qwen3.5-9b" --concurrency 2 \
         --context "ARM Cortex-R Technical Reference Manual"
-    python3 ai_pdf2toc.py --pdf arm_cortex_r82_processor_trm_102670_0101_02_en.pdf -o . --provider qwen --model "qwen/qwen3.5-9b" --base-url "http://127.0.0.1:1234/v1" --concurrency 4
 
 Requirements:
     python -m pip install pymupdf
@@ -137,10 +136,10 @@ COPILOT_MODEL_NAME = "auto"
 QWEN_MODEL_NAME = "qwen/qwen3.5-9b"
 QWEN_BASE_URL = "http://localhost:1234/v1"
 QWEN_API_KEY = "lm-studio"
-MAX_CONCURRENT_REQUESTS = 4
+MAX_CONCURRENT_REQUESTS = 1
 DEFAULT_RETRIES = 2
 LLM_TEMPERATURE = 0.1
-LLM_MAX_TOKENS = 1024
+LLM_MAX_TOKENS = 256
 LLM_TIMEOUT = 600.0
 MAX_REFERENCES = 10
 REFERENCE_TYPES = ("semantic", "structural", "external")

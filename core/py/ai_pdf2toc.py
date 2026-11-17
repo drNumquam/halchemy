@@ -139,7 +139,7 @@ QWEN_API_KEY = "lm-studio"
 MAX_CONCURRENT_REQUESTS = 1
 DEFAULT_RETRIES = 2
 LLM_TEMPERATURE = 0.1
-LLM_MAX_TOKENS = 256
+LLM_MAX_TOKENS = 1024
 LLM_TIMEOUT = 600.0
 MAX_REFERENCES = 10
 REFERENCE_TYPES = ("semantic", "structural", "external")
@@ -511,7 +511,7 @@ class QwenBackend(LLMBackend):
             ) from exc
         self._openai = openai
         self.model = model
-        self._use_reasoning_effort = True
+        self._use_reasoning_effort = False #True
         self._client = openai.OpenAI(
             base_url=normalize_base_url(base_url),
             api_key=QWEN_API_KEY,
@@ -545,7 +545,17 @@ class QwenBackend(LLMBackend):
                 LOGGER.info("The server does not accept 'reasoning_effort'; "
                             "continuing without it.")
         response = self._client.chat.completions.create(**kwargs)
-        return strip_thinking(response.choices[0].message.content)
+        message = response.choices[0].message
+        content = message.content
+
+        if not content:
+            raise RuntimeError(
+                f"Empty response from Qwen. "
+                f"Finish reason: {response.choices[0].finish_reason}. "
+                f"Reasoning: {getattr(message, 'reasoning_content', '')[:200]}"
+            )
+
+        return strip_thinking(content)
 
     async def complete(self, slot: int, system_prompt: str, user_prompt: str) -> str:
         return await asyncio.to_thread(self._call, system_prompt, user_prompt)

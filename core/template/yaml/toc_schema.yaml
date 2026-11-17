@@ -71,7 +71,7 @@ $defs:
       next:
         type: integer
         minimum: -1
-        description: Starting page of the following section (both in case the following section is a leaf or a parent). -1 in case the current node is a leaf.
+        description: Starting page of the following section (both in case the following section is a leaf or a parent). -1 in case the current node is the last one in the toc.
       references:
         type: array
         items:

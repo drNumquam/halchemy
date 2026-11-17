@@ -30,8 +30,7 @@ Notes:
       ``id`` falls back to its positional outline number.
 
 Usage:
-    python ai_pdf2toc.py --pdf <manual.pdf> -o <out_dir> [--schema <schema.yaml>]
-                      [--span-end {auto,inclusive,exclusive}] [--top-ratio 0.15] [-v]
+    python ai_pdf2toc.py -pdf <manual.pdf> -output <out_dir> [-schema <schema.yaml>]
 
 Requirements:
     python -m pip install pymupdf

@@ -40,7 +40,7 @@ Notes:
       References are inferred from the section hierarchy and metadata available 
       in the generated TOC structure. A section may contain zero or more references.
       References to external documents have id = "".
-    * next always points to the next start page of the next TOC node in document order.
+    * ``next`` always points to the next start page of the next TOC node in document order.
       For the last node, next is -1.
     * When a title carries no printed number (e.g. "Deployment Guidelines"),
       ``id`` falls back to its positional outline number.

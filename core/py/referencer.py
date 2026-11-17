@@ -72,6 +72,9 @@ def extract_toc_nodes(toc_data: dict) -> list:
                 toc_nodes.append({
                     "id": node["id"],
                     "title": node["title"],
+                    "span_start": node.get("span_start"),
+                    "span_end": node.get("span_end"),
+                    "next": node.get("next"),
                     "references": node.get("references", []),
                 })
 
@@ -89,7 +92,10 @@ def build_node_prompt(node: dict, all_nodes: list) -> str:
     payload = {
         "target": {
             "id": node["id"],
-            "title": node["title"]
+            "title": node["title"],
+            "span_start": node["span_start"],
+            "span_end": node["span_end"],
+            "next": node["next"]
         },
         "all_nodes": [
             {
@@ -178,7 +184,12 @@ async def call_llm(
     copilot_session=None
 ):
     if LLM_PROVIDER == "qwen":
-        return await asyncio.to_thread(call_qwen_llm, system_prompt, node)
+        return await asyncio.to_thread(
+            call_qwen_llm,
+            system_prompt,
+            node,
+            all_nodes
+        )
 
     if copilot_session is None:
         raise RuntimeError("The GitHub Copilot session has not been initialized.")
@@ -330,7 +341,6 @@ async def analyze_peripheral_nodes(toc_nodes: list, copilot_sessions=None):
             return {}
 
         worker_count = min(MAX_CONCURRENT_REQUESTS, len(nodes))
-        worker_scores = {}
 
         async def worker(worker_number: int) -> None:
             session = (
@@ -402,12 +412,21 @@ async def analyze_peripheral_nodes(toc_nodes: list, copilot_sessions=None):
     original_nodes
     )
 
+    return generated_refs
+
+
 
 def validate_references(
     refs,
     current_id,
     valid_ids
 ):
+
+    valid_types = {
+        "semantic",
+        "structural",
+        "external"
+    }
 
     cleaned = []
 
@@ -416,7 +435,13 @@ def validate_references(
         if not isinstance(ref, dict):
             continue
 
-        ref_id = str(ref.get("id", "")).strip()
+        ref_id = str(
+            ref.get("id", "")
+        ).strip()
+
+        ref_type = str(
+            ref.get("type", "")
+        ).strip()
 
         if ref_id == current_id:
             continue
@@ -424,15 +449,29 @@ def validate_references(
         if ref_id not in valid_ids:
             continue
 
+        if ref_type not in valid_types:
+            continue
+
+        try:
+            confidence = float(
+                ref.get("confidence", 0.0)
+            )
+        except Exception:
+            continue
+
+        confidence = max(
+            0.0,
+            min(1.0, confidence)
+        )
+
         cleaned.append({
             "id": ref_id,
-            "type": ref.get("type", "related_to"),
-            "confidence": float(
-                ref.get("confidence", 0.5)
-            )
+            "type": ref_type,
+            "confidence": confidence
         })
 
     return cleaned
+
 
 
 
@@ -522,6 +561,8 @@ async def main():
                 toc_nodes
             )
         )
+        if generated_refs is None:
+            generated_refs = {}
 
     #
     # Build map of original YAML nodes
@@ -564,6 +605,27 @@ async def main():
     print(
         f"Output written to: {output_yaml}"
     )
+
+
+
+def save_yaml(
+    data,
+    path
+):
+
+    with open(
+        path,
+        "w",
+        encoding="utf-8"
+    ) as f:
+
+        yaml.safe_dump(
+            data,
+            f,
+            allow_unicode=True,
+            sort_keys=False
+        )
+
 
 
 if __name__ == "__main__":

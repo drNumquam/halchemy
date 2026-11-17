@@ -30,16 +30,12 @@ Output contract (matches the ``schema.yaml`` used by the downstream tooling)::
 
 Notes:
     * Page numbers are 1-based physical PDF pages.
-    * Granularity is the page: a section spans every page it touches, and a
-      parent section spans all of its descendants. Whether the start page of
-      the next section is also included in the preceding one is controlled by
-      ``--span-end``:
-        - ``inclusive``: always included (adjacent sections overlap by one page,
-          or more when several sections start on the same page);
-        - ``exclusive``: never included (spans never overlap);
-        - ``auto`` (default): included, unless the next section starts at the
-          top of its page (bookmark destination within ``--top-ratio`` of the
-          page height); an unknown destination position counts as shared.
+    * Granularity is the page: a section spans every page it touches, so the
+      start page of a section is also included in the immediately preceding
+      section. Adjacent sections overlap by one page (or more, when several
+      sections start on the same page). A section ends on the start page of the
+      next section at the same or a shallower level, hence a parent section
+      spans all of its descendants; the last section ends on the last page.
       Footnotes are not analysed separately: since the granularity is the page,
       a footnote belongs to the section(s) spanning the page it sits on, and any
       cross-section reference it contains is outside this tool's scope.
@@ -69,7 +65,32 @@ Notes:
 
 Usage:
     python ai_pdf2toc.py --pdf <manual.pdf> --output <out_dir> [--schema <schema.yaml>]
-                         [--provider copilot|qwen] [--no-ai]
+                         [--no-ai] [--provider copilot|qwen] [--model <name>]
+                         [--base-url <url>] [--concurrency <n>] [--retries <n>]
+                         [--min-confidence <0-1>] [--context "<document description>"]
+                         [-v]
+
+Options:
+    --pdf PATH              input PDF (required)
+    -o, --output DIR        directory for toc.yaml and report.txt (required)
+    --schema PATH           YAML/JSON Schema used to validate toc.yaml before writing
+    --no-ai                 skip the cross-references inference (references: [])
+    --provider NAME         copilot (default) | qwen
+    --model NAME            model name (default: "auto" for copilot,
+                            "qwen/qwen3.5-9b" for qwen)
+    --base-url URL          OpenAI-compatible endpoint, qwen only
+                            (default: http://localhost:1234/v1)
+    --concurrency N         parallel AI requests (default 4)
+    --retries N             retries per section after a failed request (default 2)
+    --min-confidence C      drop references with confidence below C (default 0.0)
+    --context TEXT          short description of the document added to the prompt
+    -v, --verbose           debug logging
+
+Examples:
+    python ai_pdf2toc.py --pdf manual.pdf -o out --no-ai
+    python ai_pdf2toc.py --pdf manual.pdf -o out --schema schema.yaml \
+        --provider qwen --model "qwen/qwen3.5-9b" --concurrency 2 \
+        --context "ARM Cortex-R Technical Reference Manual"
 
 Requirements:
     python -m pip install pymupdf
@@ -94,11 +115,13 @@ import math
 import os
 import re
 import sys
+import time
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
-from enum import Enum, IntEnum
+from enum import IntEnum
 from pathlib import Path
 from types import ModuleType
+from urllib.parse import urlsplit, urlunsplit
 from typing import Any, Iterator, Sequence
 
 LOGGER = logging.getLogger("pdf2toc")
@@ -106,7 +129,6 @@ LOGGER = logging.getLogger("pdf2toc")
 TOC_FILENAME = "toc.yaml"
 REPORT_FILENAME = "report.txt"
 DEFAULT_SCHEMA_HINT = "./schema.yaml"
-DEFAULT_TOP_RATIO = 0.15
 
 # --- LLM configuration ------------------------------------------------------ #
 DEFAULT_PROVIDER = "copilot"            # "copilot" or "qwen"
@@ -136,14 +158,6 @@ class ExitCode(IntEnum):
     FAILURE = 2
 
 
-class SpanEnd(str, Enum):
-    """How a section's last page is derived from the next bookmark."""
-
-    AUTO = "auto"            # shared page unless the next bookmark starts at page top
-    INCLUSIVE = "inclusive"  # always include the next bookmark's start page
-    EXCLUSIVE = "exclusive"  # never include it (spans never overlap)
-
-
 class TocError(Exception):
     """Raised for expected, user-reportable failures."""
 
@@ -155,7 +169,6 @@ class Bookmark:
     level: int
     title: str
     page: int
-    top_ratio: float | None = None  # destination y / page height; None if unknown
     notes: tuple[str, ...] = ()     # per-entry warnings found while normalizing
 
 
@@ -169,7 +182,6 @@ class Section:
     start_page: int
     end_page: int = 0
     next: int = -1
-    top_ratio: float | None = None
     title: str = ""
     parent: Section | None = field(default=None, repr=False)
     children: list[Section] = field(default_factory=list, repr=False)
@@ -197,25 +209,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         required=True,
         help="Directory where toc.yaml and report.txt are written.",
     )
-    parser.add_argument(
-        "--span-end",
-        type=SpanEnd,
-        choices=list(SpanEnd),
-        metavar="{auto,inclusive,exclusive}",
-        default=SpanEnd.AUTO,
-        help="Last page of a section: 'auto' (default) includes the next section's "
-             "start page unless it starts at the top of that page; 'inclusive' "
-             "always includes it; 'exclusive' never does.",
-    )
-    parser.add_argument(
-        "--top-ratio",
-        type=float,
-        default=DEFAULT_TOP_RATIO,
-        help="With --span-end auto: a section whose destination lies within this "
-             f"fraction of the page height from the top counts as starting at the "
-             f"top of the page (default: {DEFAULT_TOP_RATIO}).",
-    )
-
     ai = parser.add_argument_group("AI cross-references")
     ai.add_argument("--no-ai", action="store_true",
                     help="Skip the cross-references inference (references: []).")
@@ -281,28 +274,14 @@ def load_pymupdf() -> ModuleType:
 def read_bookmarks(pymupdf: ModuleType, pdf_path: Path) -> tuple[int, list[list[Any]]]:
     """Return ``(page_count, raw_bookmarks)`` for the given PDF.
 
-    Each raw bookmark is ``[level, title, page, top_ratio]`` where ``top_ratio`` is
-    the destination's vertical offset from the top of the page as a fraction of
-    the page height (``None`` when the destination carries no position).
+    Each raw bookmark is ``[level, title, page]``; ``page`` is 1-based and is
+    ``-1`` (or lower than 1) when the destination cannot be resolved.
     """
     try:
         with pymupdf.open(pdf_path) as document:
             if document.needs_pass:
                 raise TocError("The PDF is password-protected; no TOC was created.")
-            page_count = document.page_count
-            heights: dict[int, float] = {}
-            raw: list[list[Any]] = []
-            for level, title, page, *rest in document.get_toc(simple=False):
-                ratio: float | None = None
-                destination = rest[0] if rest and isinstance(rest[0], dict) else {}
-                point = destination.get("to")
-                if point is not None and isinstance(page, int) and 1 <= page <= page_count:
-                    if page not in heights:
-                        heights[page] = float(document[page - 1].rect.height)
-                    if heights[page] > 0:
-                        ratio = min(max(float(point.y) / heights[page], 0.0), 1.0)
-                raw.append([level, title, page, ratio])
-            return page_count, raw
+            return document.page_count, document.get_toc(simple=True)
     except TocError:
         raise
     except Exception as exc:  # PyMuPDF raises several unrelated exception types.
@@ -320,13 +299,12 @@ def normalize_bookmarks(raw: Sequence[Sequence[Any]], page_count: int) -> list[B
     Entries that are malformed or point beyond the last page are dropped (they
     have no TOC entry, so they are reported in the general log).
     """
-    candidates: list[tuple[int, str, int | None, float | None]] = []
+    candidates: list[tuple[int, str, int | None]] = []
     for position, entry in enumerate(raw, start=1):
         if len(entry) < 3:
             LOGGER.warning("Bookmark #%d is malformed and was skipped.", position)
             continue
         level_raw, title_raw, page_raw = entry[:3]
-        ratio = entry[3] if len(entry) > 3 and isinstance(entry[3], (int, float)) else None
         title = " ".join(title_raw.split()) if isinstance(title_raw, str) else ""
         try:
             level, page = int(level_raw), int(page_raw)
@@ -342,11 +320,11 @@ def normalize_bookmarks(raw: Sequence[Sequence[Any]], page_count: int) -> list[B
                 title, page, page_count,
             )
             continue
-        candidates.append((level, title, page if page >= 1 else None, ratio))
+        candidates.append((level, title, page if page >= 1 else None))
 
     resolved: list[Bookmark] = []
     next_page: int | None = None
-    for level, title, page, ratio in reversed(candidates):
+    for level, title, page in reversed(candidates):
         notes: tuple[str, ...] = ()
         if page is None:
             if next_page is None:
@@ -354,35 +332,19 @@ def normalize_bookmarks(raw: Sequence[Sequence[Any]], page_count: int) -> list[B
                 continue
             notes = (f"WARNING: bookmark has no destination; page {next_page} of the "
                      "next bookmark was used.",)
-            page, ratio = next_page, None
+            page = next_page
         next_page = page
-        resolved.append(Bookmark(level=level, title=title, page=page,
-                                 top_ratio=ratio, notes=notes))
+        resolved.append(Bookmark(level=level, title=title, page=page, notes=notes))
     resolved.reverse()
     return resolved
 
 
-def last_page(
-    closed: Section, successor: Section, mode: SpanEnd, top_ratio: float
-) -> int:
-    """Last page of ``closed`` given the bookmark that terminates it."""
-    if mode is SpanEnd.EXCLUSIVE:
-        shares_page = False
-    elif mode is SpanEnd.INCLUSIVE:
-        shares_page = True
-    else:  # AUTO: unknown position is treated conservatively as a shared page.
-        shares_page = successor.top_ratio is None or successor.top_ratio > top_ratio
-    end = successor.start_page if shares_page else successor.start_page - 1
-    return max(closed.start_page, end)
+def nest_sections(bookmarks: Sequence[Bookmark], page_count: int) -> list[Section]:
+    """Nest bookmarks by level and compute inclusive 1-based page spans (single pass).
 
-
-def nest_sections(
-    bookmarks: Sequence[Bookmark],
-    page_count: int,
-    mode: SpanEnd = SpanEnd.AUTO,
-    top_ratio: float = DEFAULT_TOP_RATIO,
-) -> list[Section]:
-    """Nest bookmarks by level and compute inclusive 1-based page spans (single pass)."""
+    A section ends on the start page of the next bookmark at the same or a
+    shallower level: that page is shared with the following section.
+    """
     roots: list[Section] = []
     stack: list[Section] = []
     previous_page = 0
@@ -393,7 +355,6 @@ def nest_sections(
             raw_title=bookmark.title,
             level=bookmark.level,
             start_page=bookmark.page,
-            top_ratio=bookmark.top_ratio,
             notes=list(bookmark.notes),
         )
         if bookmark.page < previous_page:
@@ -406,7 +367,7 @@ def nest_sections(
         # Close every open section at the same or a deeper level.
         while stack and stack[-1].level >= node.level:
             closed = stack.pop()
-            closed.end_page = last_page(closed, node, mode, top_ratio)
+            closed.end_page = max(closed.start_page, node.start_page)
         if stack:
             node.parent = stack[-1]
             stack[-1].children.append(node)
@@ -489,15 +450,10 @@ def assign_next(sections: Sequence[Section]) -> None:
         node.next = nodes[index + 1].start_page if index + 1 < len(nodes) else -1
 
 
-def build_sections(
-    raw: Sequence[Sequence[Any]],
-    page_count: int,
-    mode: SpanEnd = SpanEnd.AUTO,
-    top_ratio: float = DEFAULT_TOP_RATIO,
-) -> list[Section]:
+def build_sections(raw: Sequence[Sequence[Any]], page_count: int) -> list[Section]:
     """Full pipeline: raw bookmarks -> numbered, consistent section tree."""
     bookmarks = normalize_bookmarks(raw, page_count)
-    roots = nest_sections(bookmarks, page_count, mode, top_ratio)
+    roots = nest_sections(bookmarks, page_count)
     fallbacks = assign_numbers(roots)
     assign_next(roots)
     if fallbacks:
@@ -529,6 +485,18 @@ class LLMBackend:
         raise NotImplementedError
 
 
+def normalize_base_url(url: str) -> str:
+    """Append ``/v1`` when the endpoint has no path (OpenAI-compatible servers)."""
+    parts = urlsplit(url.strip())
+    if not parts.scheme or not parts.netloc:
+        raise TocError(f"--base-url must look like http://host:port/v1, got {url!r}.")
+    if parts.path in ("", "/"):
+        fixed = urlunsplit((parts.scheme, parts.netloc, "/v1", "", ""))
+        LOGGER.info("--base-url has no path; using %s", fixed)
+        return fixed
+    return url.strip().rstrip("/")
+
+
 class QwenBackend(LLMBackend):
     """Local OpenAI-compatible server (e.g. LM Studio); blocking calls run in threads."""
 
@@ -543,8 +511,9 @@ class QwenBackend(LLMBackend):
             ) from exc
         self._openai = openai
         self.model = model
+        self._use_reasoning_effort = True
         self._client = openai.OpenAI(
-            base_url=base_url,
+            base_url=normalize_base_url(base_url),
             api_key=QWEN_API_KEY,
             timeout=LLM_TIMEOUT,
             http_client=httpx.Client(trust_env=False, timeout=LLM_TIMEOUT),
@@ -561,11 +530,21 @@ class QwenBackend(LLMBackend):
             max_tokens=LLM_MAX_TOKENS,
             stream=False,
         )
-        try:
-            response = self._client.chat.completions.create(reasoning_effort="none", **kwargs)
-        except (TypeError, self._openai.BadRequestError, self._openai.UnprocessableEntityError):
-            # SDK or server without support for ``reasoning_effort``.
-            response = self._client.chat.completions.create(**kwargs)
+        if self._use_reasoning_effort:
+            try:
+                response = self._client.chat.completions.create(
+                    reasoning_effort="none", **kwargs)
+                return strip_thinking(response.choices[0].message.content)
+            except (TypeError, self._openai.BadRequestError,
+                    self._openai.UnprocessableEntityError) as exc:
+                # Retry without the parameter only if it is the one being rejected;
+                # any other error (e.g. server failure) must not double the requests.
+                if not isinstance(exc, TypeError) and "reasoning" not in str(exc).lower():
+                    raise
+                self._use_reasoning_effort = False
+                LOGGER.info("The server does not accept 'reasoning_effort'; "
+                            "continuing without it.")
+        response = self._client.chat.completions.create(**kwargs)
         return strip_thinking(response.choices[0].message.content)
 
     async def complete(self, slot: int, system_prompt: str, user_prompt: str) -> str:
@@ -762,6 +741,10 @@ async def enrich_references(
     listing = build_listing(nodes)
     slots = max(1, min(args.concurrency, len(nodes)))
     attempts = args.retries + 1
+    approx_tokens = (len(system_prompt) + len(build_user_prompt(listing, nodes[0]))) // 3
+    LOGGER.info("Each request is about %d tokens (the full TOC is sent every time); "
+                "the model context must exceed this by at least %d, for each of the "
+                "%d parallel requests.", approx_tokens, LLM_MAX_TOKENS, slots)
     state = {"failed": 0, "done": 0}
 
     async with create_backend(args, slots) as backend:
@@ -771,6 +754,7 @@ async def enrich_references(
                 node = nodes[index]
                 LOGGER.debug("Processing node %d/%d (ID %s)...", index + 1, len(nodes), node.id)
                 user_prompt = build_user_prompt(listing, node)
+                started = time.monotonic()
                 error: Exception | None = None
                 for attempt in range(1, attempts + 1):
                     try:
@@ -795,9 +779,11 @@ async def enrich_references(
                         f"ERROR: AI inference failed after {attempts} attempt(s): {error}"
                     )
                 state["done"] += 1
-                if state["done"] % 10 == 0 or state["done"] == len(nodes):
-                    LOGGER.info("References: %d/%d sections processed.",
-                                state["done"], len(nodes))
+                LOGGER.info("[%d/%d] section %s: %s (%.1fs)", state["done"], len(nodes),
+                            node.id,
+                            "FAILED" if error is not None
+                            else f"{len(node.references)} reference(s)",
+                            time.monotonic() - started)
 
         await asyncio.gather(*(worker(slot) for slot in range(slots)))
     return state["failed"], len(nodes)
@@ -916,8 +902,6 @@ def log_entry_report(sections: Sequence[Section]) -> None:
 # --------------------------------------------------------------------------- #
 def check_arguments(args: argparse.Namespace) -> None:
     """Reject out-of-range numeric options."""
-    if not 0.0 <= args.top_ratio <= 1.0:
-        raise TocError("--top-ratio must be between 0 and 1.")
     if not 0.0 <= args.min_confidence <= 1.0:
         raise TocError("--min-confidence must be between 0 and 1.")
     if args.concurrency < 1:
@@ -938,7 +922,7 @@ def run(args: argparse.Namespace, output_dir: Path) -> ExitCode:
     LOGGER.info("Output directory: %s", output_dir)
 
     page_count, raw_bookmarks = read_bookmarks(pymupdf, pdf_path)
-    sections = build_sections(raw_bookmarks, page_count, args.span_end, args.top_ratio)
+    sections = build_sections(raw_bookmarks, page_count)
     if not sections:
         LOGGER.warning("The PDF has no usable bookmarks. No %s was created.", TOC_FILENAME)
         return ExitCode.NO_TOC
@@ -946,11 +930,8 @@ def run(args: argparse.Namespace, output_dir: Path) -> ExitCode:
     by_id = check_duplicate_ids(sections)
     LOGGER.info("PDF pages: %d", page_count)
     LOGGER.info("Usable TOC entries: %d", sum(1 for _ in walk(sections)))
-    LOGGER.info(
-        "Spans are 1-based physical PDF pages; span_end is inclusive "
-        "(--span-end %s; adjacent spans may overlap).",
-        args.span_end.value,
-    )
+    LOGGER.info("Spans are 1-based physical PDF pages, inclusive; a section also "
+                "includes the start page of the next one (adjacent spans overlap).")
 
     try:
         if args.no_ai:
@@ -1007,6 +988,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         exit_code = run(args, output_dir)
     except TocError as exc:
         LOGGER.error("%s", exc)
+    except KeyboardInterrupt:
+        LOGGER.error("Interrupted by user; %s was not updated.", TOC_FILENAME)
     except Exception as exc:  # Last-resort guard: always report and return a code.
         LOGGER.error("Processing failed: %s", exc, exc_info=args.verbose)
     finally:
@@ -1019,3 +1002,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

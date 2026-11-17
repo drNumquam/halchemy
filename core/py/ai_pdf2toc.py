@@ -34,7 +34,9 @@ Usage:
 
 Requirements:
     python -m pip install pymupdf
-    python -m pip install pyyaml jsonschema      # only with --schema
+    python -m pip install pyyaml jsonschema     
+    python -m pip install httpx2
+    python -m pip install openai
 
 Exit codes:
     0  success

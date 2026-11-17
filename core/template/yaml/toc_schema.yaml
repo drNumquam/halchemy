@@ -70,7 +70,7 @@ $defs:
         description: Ending page of the section including all children sections.
       next:
         type: integer
-        minimum: 0
+        minimum: -1
         description: Starting page of the following section (both in case the following section is a leaf or a parent). -1 in case the current node is a leaf.
       references:
         type: array

@@ -380,6 +380,17 @@ def check_consistency(
     return issues
 
 
+
+def assign_next(sections: Sequence[Section]) -> None:
+    nodes = list(walk(sections))
+
+    for index, node in enumerate(nodes):
+        if index + 1 < len(nodes):
+            node.next = nodes[index + 1].start_page
+        else:
+            node.next = -1
+            
+
 def build_sections(
     raw: Sequence[Sequence[Any]],
     page_count: int,
@@ -390,6 +401,7 @@ def build_sections(
     bookmarks = normalize_bookmarks(raw, page_count)
     roots = nest_sections(bookmarks, page_count, mode, top_ratio)
     fallbacks = assign_numbers(roots)
+    assign_next(roots)
     if fallbacks:
         LOGGER.info("%d section(s) had no printed number; positional numbers were used.", fallbacks)
     issues = check_consistency(roots, page_count)

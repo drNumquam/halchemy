@@ -1,5 +1,16 @@
 #!/usr/bin/env python3
-"""Generate ``toc.yaml`` from the hierarchical bookmarks of a PDF document.
+"""
+Generate ``toc.yaml`` from the hierarchical bookmarks of a PDF document and 
+enrich the resulting TOC with AI-generated cross-references between sections
+
+Processing pipeline:
+
+PDF
+  -> bookmark extraction
+  -> TOC hierarchy generation
+  -> page span calculation
+  -> schema validation
+  -> toc.yaml
 
 Output contract (matches the ``schema.yaml`` used by the downstream tooling)::
 
@@ -25,6 +36,8 @@ Notes:
     * ``references`` contains AI-generated cross_references between TOC nodes. 
       References are inferred from the section hierarchy and metadata available 
       in the generated TOC structure. A section may contain zero or more references.
+    * next always points to the next start page of the next TOC node in document order.
+      For the last node, next is -1.
     * When a title carries no printed number (e.g. "Deployment Guidelines"),
       ``id`` falls back to its positional outline number.
 

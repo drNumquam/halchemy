@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Generate ``toc.yaml`` from the hierarchical bookmarks of a PDF document and 
-enrich the resulting TOC with AI-generated cross-references between sections
+enrich the resulting TOC with AI-generated cross-references between sections.
 
 Processing pipeline:
 
@@ -40,6 +40,8 @@ Notes:
       For the last node, next is -1.
     * When a title carries no printed number (e.g. "Deployment Guidelines"),
       ``id`` falls back to its positional outline number.
+    * A report.txt is generate to report errors or warnings for each TOC entry both during the 
+      toc extraction and cross-references inference by AI
 
 Usage:
     python ai_pdf2toc.py --pdf <manual.pdf> --output <out_dir> [--schema <schema.yaml>]

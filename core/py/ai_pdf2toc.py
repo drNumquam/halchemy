@@ -33,9 +33,13 @@ Notes:
     * Granularity is the page: a section spans every page it touches. The start 
       page of a section is also included in the immediately preceding section.
       Adjacent sections may overlap by one page.
+      Footnotes are included in a section's content if and only if their corrisponding 
+      references are present in the body of the section: footnotes may also include 
+      cross-section references.
     * ``references`` contains AI-generated cross_references between TOC nodes. 
       References are inferred from the section hierarchy and metadata available 
       in the generated TOC structure. A section may contain zero or more references.
+      References to external documents have id = "".
     * next always points to the next start page of the next TOC node in document order.
       For the last node, next is -1.
     * When a title carries no printed number (e.g. "Deployment Guidelines"),

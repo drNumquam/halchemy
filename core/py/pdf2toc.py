@@ -6,11 +6,11 @@ Output contract (matches the ``schema.yaml`` used by the downstream tooling)::
     source: "<pdf filename>"
     pages: <page count>
     sections:
-      - id: <int>                 # unique, assigned in document (pre-order) order
+      - id: "<1.2.3>"             # printed number or positional fallback
         title: "<title>"          # title without the leading section number
-        number: "<1.2.3>"         # printed number, or positional fallback
         span_start: <int>         # first page, 1-based, inclusive
         span_end: <int>           # last page, 1-based, inclusive
+        next: <int>               # next node page, 1-based, inclusive
         references: []            # not derivable from bookmarks (see notes)
         children: [...]
 

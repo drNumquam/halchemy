@@ -40,8 +40,8 @@ Notes:
       For the last node, next is -1.
     * When a title carries no printed number (e.g. "Deployment Guidelines"),
       ``id`` falls back to its positional outline number.
-    * A report.txt is generate to report errors or warnings for each TOC entry both during the 
-      toc extraction and cross-references inference by AI
+    * A report.txt is generated to report errors or warnings for each TOC entry both during the 
+      toc extraction and cross-references inference by AI.
 
 Usage:
     python ai_pdf2toc.py --pdf <manual.pdf> --output <out_dir> [--schema <schema.yaml>]

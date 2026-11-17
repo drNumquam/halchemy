@@ -102,13 +102,12 @@ class Bookmark:
 class Section:
     """One node of the nested table of contents."""
 
-    id: int
+    id: str
     raw_title: str
     level: int
     start_page: int
     end_page: int = 0
     top_ratio: float | None = None
-    number: str = ""
     title: str = ""
     children: list[Section] = field(default_factory=list)
 

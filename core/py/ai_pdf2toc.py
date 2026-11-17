@@ -68,7 +68,7 @@ Usage:
                          [--no-ai] [--provider copilot|qwen] [--model <name>]
                          [--base-url <url>] [--concurrency <n>] [--retries <n>]
                          [--min-confidence <0-1>] [--context "<document description>"]
-                         [-v]
+                         [--context-nodes <n>] [-v]
 
 Options:
     --pdf PATH              input PDF (required)
@@ -84,6 +84,10 @@ Options:
     --retries N             retries per section after a failed request (default 2)
     --min-confidence C      drop references with confidence below C (default 0.0)
     --context TEXT          short description of the document added to the prompt
+    --context-nodes N       Maximum number of TOC nodes included in each AI request
+                            (default 100). Set the number of nearby sections to include in the prompt for each target section.
+                            If this value matches the whole number of TOC nodes, the entire TOC will be sent to the LLM for each section (but LLM model shall have a big context size). 
+                            If this value is smaller than the total number of TOC nodes, only a subset of nearby sections will be included in the prompt for each target section.
     -v, --verbose           debug logging
 
 Examples:

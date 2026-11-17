@@ -364,7 +364,7 @@ def check_consistency(
     """Log structural anomalies and return their count."""
     issues = 0
     for section in sections:
-        label = f"{section.number} {section.title!r}"
+        label = f"{section.id} {section.title!r}"
         if not 1 <= section.start_page <= section.end_page <= page_count:
             LOGGER.warning("Section %s has an invalid span %d-%d.",
                            label, section.start_page, section.end_page)
@@ -374,7 +374,7 @@ def check_consistency(
         ):
             LOGGER.warning("Section %s (%d-%d) lies outside its parent %s (%d-%d).",
                            label, section.start_page, section.end_page,
-                           parent.number, parent.start_page, parent.end_page)
+                           parent.id, parent.start_page, parent.end_page)
             issues += 1
         issues += check_consistency(section.children, page_count, section)
     return issues

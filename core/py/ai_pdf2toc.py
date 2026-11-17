@@ -10,7 +10,7 @@ Output contract (matches the ``schema.yaml`` used by the downstream tooling)::
         title: "<title>"          # title without the leading section number
         span_start: <int>         # first page, 1-based, inclusive
         span_end: <int>           # last page, 1-based, inclusive
-        next: <int>               # next node page, 1-based, inclusive
+        next: <int>               # start page of the next section in TOC preorder traversal
         references: 
           - id: "<target section id>"
             type: "<semantic|structural|external>"
@@ -18,24 +18,23 @@ Output contract (matches the ``schema.yaml`` used by the downstream tooling)::
         children: [...]
 
 Notes:
-    * Page numbers are 1-based physical PDF pages; ``span_end`` is inclusive.
-    * Granularity is the page: a section spans every page it touches, so
-      adjacent spans may overlap by one page. A section ends on the start page
-      of the next bookmark of the same or a higher level, unless that bookmark
-      begins at the very top of its page (see ``--span-end``), in which case
-      the section ends on the previous page.
-    * ``references`` contains AI-generated cross_reference between TOC nodes. 
-      References are inferred from the section hierarchy and metadata available in the generated TOC structure.
+    * Page numbers are 1-based physical PDF pages.
+    * Granularity is the page: a section spans every page it touches. The start 
+      page of a section is also included in the immediately preceding section.
+      Adjacent sections may overlap by one page.
+    * ``references`` contains AI-generated cross_references between TOC nodes. 
+      References are inferred from the section hierarchy and metadata available 
+      in the generated TOC structure. A section may contain zero or more references.
     * When a title carries no printed number (e.g. "Deployment Guidelines"),
       ``id`` falls back to its positional outline number.
 
 Usage:
-    python ai_pdf2toc.py -pdf <manual.pdf> -output <out_dir> [-schema <schema.yaml>]
+    python ai_pdf2toc.py --pdf <manual.pdf> --output <out_dir> [--schema <schema.yaml>]
 
 Requirements:
     python -m pip install pymupdf
     python -m pip install pyyaml jsonschema     
-    python -m pip install httpx2
+    python -m pip install httpx
     python -m pip install openai
 
 Exit codes:

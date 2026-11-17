@@ -85,9 +85,22 @@ Options:
     --min-confidence C      drop references with confidence below C (default 0.0)
     --context TEXT          short description of the document added to the prompt
     --context-nodes N       Maximum number of TOC nodes included in each AI request
-                            (default 100). Set the number of nearby sections to include in the prompt for each target section.
-                            If this value matches the whole number of TOC nodes, the entire TOC will be sent to the LLM for each section (but LLM model shall have a big context size). 
-                            If this value is smaller than the total number of TOC nodes, only a subset of nearby sections will be included in the prompt for each target section.
+                            (default 100).
+                            Controls how many TOC sections are included in the
+                            prompt for each target section.
+                            If N is greater than or equal to the total number
+                            of TOC nodes, the entire TOC will be included in
+                            every request, allowing the LLM to identify
+                            relationships across the whole document.
+                            If N is smaller than the total number of TOC nodes,
+                            only a subset of sections will be included, selected
+                            according to the target section's position and
+                            structural relationships.
+                            Processing the entire TOC requires an LLM context
+                            window large enough to accommodate the complete
+                            prompt and the generated response. A context size
+                            of at least 64K tokens is recommended; 128K or more
+                            is preferable for large TOCs.
     -v, --verbose           debug logging
 
 Examples:

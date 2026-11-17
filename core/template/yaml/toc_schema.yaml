@@ -31,9 +31,14 @@ $defs:
     description: A reference linked to a section with an associated confidence score.
     properties:
       id:
-        type: integer
-        minimum: 0
+        type: string
         description: Referred section id.
+      type: 
+        type: string
+        enum:
+          - semantic
+          - structural
+          - external
       confidence:
         type: number
         minimum: 0.0
@@ -41,6 +46,7 @@ $defs:
         description: Confidence score of the reference match, ranging from 0.0 to 1.0.
     required:
       - id
+      - type
       - confidence
     additionalProperties: false
 
@@ -49,15 +55,11 @@ $defs:
     description: A document section node that can contain nested child sections.
     properties:
       id:
-        type: integer
-        minimum: 0
-        description: Unique identifier of the section.
+        type: string
+        description:  Section numbering label (e.g., '1.1', 'A.2').
       title:
         type: string
         description: Title or heading text of the section.
-      number:
-        type: string
-        description: Section numbering label (e.g., '1.1', 'A.2').
       span_start:
         type: integer
         minimum: 0
@@ -66,6 +68,10 @@ $defs:
         type: integer
         minimum: 0
         description: Ending page of the section including all children sections.
+      next:
+        type: integer
+        minimum: 0
+        description: Starting page of the following section (both in case the following section is a leaf or a parent). -1 in case the current node is a leaf.
       references:
         type: array
         items:
@@ -79,9 +85,9 @@ $defs:
     required:
       - id
       - title
-      - number
       - span_start
       - span_end
+      - next
       - references
       - children
     additionalProperties: false

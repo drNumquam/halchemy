@@ -228,6 +228,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     ai.add_argument("--context",
                     help="Short description of the document, added to the prompt "
                          "(e.g. 'ARM Cortex-R Technical Reference Manual').")
+    ai.add_argument(
+        "--context-nodes",
+        type=int,
+        default=100,
+        help="Maximum number of nearby TOC nodes included in each AI request (default 100).",
+    )
 
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Enable debug logging."
@@ -519,6 +525,7 @@ class QwenBackend(LLMBackend):
             http_client=httpx.Client(trust_env=False, timeout=LLM_TIMEOUT),
         )
 
+
     def _call(self, system_prompt: str, user_prompt: str) -> str:
         kwargs: dict[str, Any] = dict(
             model=self.model,
@@ -530,32 +537,75 @@ class QwenBackend(LLMBackend):
             max_tokens=LLM_MAX_TOKENS,
             stream=False,
         )
+
+        # First attempt: reasoning_effort, if enabled.
         if self._use_reasoning_effort:
             try:
                 response = self._client.chat.completions.create(
-                    reasoning_effort="none", **kwargs)
-                return strip_thinking(response.choices[0].message.content)
-            except (TypeError, self._openai.BadRequestError,
-                    self._openai.UnprocessableEntityError) as exc:
-                # Retry without the parameter only if it is the one being rejected;
-                # any other error (e.g. server failure) must not double the requests.
-                if not isinstance(exc, TypeError) and "reasoning" not in str(exc).lower():
+                    reasoning_effort="none", **kwargs
+                )
+            except (
+                TypeError,
+                self._openai.BadRequestError,
+                self._openai.UnprocessableEntityError,
+            ) as exc:
+
+                if (
+                    not isinstance(exc, TypeError)
+                    and "reasoning" not in str(exc).lower()
+                ):
                     raise
+
                 self._use_reasoning_effort = False
-                LOGGER.info("The server does not accept 'reasoning_effort'; "
-                            "continuing without it.")
-        response = self._client.chat.completions.create(**kwargs)
-        message = response.choices[0].message
-        content = message.content
+                LOGGER.info(
+                    "Server does not support reasoning_effort; "
+                    "retrying without it."
+                )
+
+                response = self._client.chat.completions.create(**kwargs)
+
+        else:
+            response = self._client.chat.completions.create(**kwargs)
+
+        # Extract response.
+        choice = response.choices[0]
+        message = choice.message
+
+        content = message.content or ""
+        reasoning = getattr(message, "reasoning_content", "") or ""
+        finish_reason = choice.finish_reason
+
+        # Detailed diagnostics.
+        LOGGER.debug(
+            "Qwen response: finish_reason=%s, "
+            "content_length=%d, reasoning_length=%d, usage=%s",
+            finish_reason,
+            len(content),
+            len(reasoning),
+            response.usage,
+        )
+
+        if not content.strip():
+            raise RuntimeError(
+                "Empty response from Qwen. "
+                f"Finish reason: {finish_reason}. "
+                f"Reasoning: {reasoning[:500]}"
+            )
+
+        # Remove possible thinking blocks.
+        content = strip_thinking(content)
 
         if not content:
             raise RuntimeError(
-                f"Empty response from Qwen. "
-                f"Finish reason: {response.choices[0].finish_reason}. "
-                f"Reasoning: {getattr(message, 'reasoning_content', '')[:200]}"
+                "Qwen returned only reasoning content, "
+                f"without a usable answer. Finish reason: {finish_reason}"
             )
 
-        return strip_thinking(content)
+        # Log the actual model output for troubleshooting.
+        LOGGER.debug("Qwen raw response: %s", content[:2000])
+
+        return content
+
 
     async def complete(self, slot: int, system_prompt: str, user_prompt: str) -> str:
         return await asyncio.to_thread(self._call, system_prompt, user_prompt)
@@ -615,40 +665,141 @@ def create_backend(args: argparse.Namespace, slots: int) -> LLMBackend:
 # --------------------------------------------------------------------------- #
 # AI cross-references
 # --------------------------------------------------------------------------- #
+
 def build_system_prompt(context: str | None) -> str:
     """Instructions shared by every request."""
     subject = f" ({context})" if context else ""
+
     return (
-        f"You are an expert technical reader analysing the table of contents of a "
-        f"technical document{subject}.\n"
-        "You receive the full list of sections (id, parent id, title) and ONE target "
-        "section with its page span. Using ONLY this metadata, list the OTHER sections "
-        "that the target most likely cross-references.\n\n"
+        f"You are an expert technical reader analysing the table of contents "
+        f"of a technical document{subject}.\n\n"
+
+        "TASK:\n"
+        "Identify sections that the TARGET section is likely to reference "
+        "or that a reader would consult together with it.\n\n"
+
+        "INPUT:\n"
+        "- You receive the complete list of sections.\n"
+        "- You receive one TARGET section.\n"
+        "- The TARGET is input data, NOT the expected output.\n\n"
+
         "REFERENCE TYPES:\n"
-        "- structural: relation implied by the document layout (overview and detail, "
-        "prerequisite, summary, appendix of a chapter, ...).\n"
-        "- semantic: topically related sections that a reader would consult together.\n"
-        "- external: the target probably cites a document outside this one "
-        '(standards, other manuals). Use id "".\n\n'
+        "- structural: relation implied by document layout "
+        "(overview/detail, prerequisite, appendix, etc.).\n"
+        "- semantic: topically related sections.\n"
+        "- external: probable reference to an external document. Use id \"\".\n\n"
+
         "RULES:\n"
-        "- Copy target ids exactly from the list. Never reference the target itself.\n"
-        "- Be conservative: returning no references is fine.\n"
-        "- confidence is a float from 0.00 to 1.00: how likely the reference is real.\n"
-        f"- At most {MAX_REFERENCES} references.\n"
-        "- Output ONLY a JSON object, with no Markdown fences and no other text:\n"
-        '{"references": [{"id": "<section id>", "type": "semantic|structural|external", '
-        '"confidence": 0.0}]}'
+        "- Use ONLY the supplied metadata.\n"
+        "- Never reproduce the TARGET object.\n"
+        "- Never return section metadata.\n"
+        "- Copy section ids exactly.\n"
+        "- Never reference the TARGET itself.\n"
+        "- Be conservative: an empty references array is acceptable.\n"
+        "- Confidence must be between 0.0 and 1.0.\n"
+        f"- Maximum {MAX_REFERENCES} references.\n\n"
+
+        "OUTPUT FORMAT:\n"
+        "Return exactly one JSON object with this structure:\n"
+        '{"references": [{"id": "2", "type": "semantic", '
+        '"confidence": 0.85}]}\n\n'
+
+        "If no references are appropriate, return exactly:\n"
+        '{"references": []}\n\n'
+
+        "Do not include explanations, Markdown, code fences or additional keys."
     )
 
 
-def build_listing(nodes: Sequence[Section]) -> str:
-    """Compact list of every section; identical for all requests (cache friendly)."""
+
+def build_listing(
+    nodes: Sequence[Section],
+    target: Section,
+    max_nodes: int = 100,
+) -> str:
+    """
+    Build a compact, target-specific TOC listing.
+
+    Includes:
+      - target and ancestors;
+      - siblings;
+      - children;
+      - nearby sections in document order.
+
+    The result is limited to max_nodes where possible.
+    """
+    relevant: dict[int, Section] = {}
+
+    # Target and ancestors
+    current: Section | None = target
+    while current is not None:
+        relevant[id(current)] = current
+        current = current.parent
+
+    # Siblings
+    siblings = target.parent.children if target.parent else [
+        node for node in nodes if node.parent is None
+    ]
+
+    for sibling in siblings:
+        relevant[id(sibling)] = sibling
+
+    # Children
+    for child in target.children:
+        relevant[id(child)] = child
+
+    # Nearby nodes in document order
+    try:
+        index = next(i for i, node in enumerate(nodes) if node is target)
+
+        remaining = max(0, max_nodes - len(relevant))
+        before = remaining // 2
+        after = remaining - before
+
+        start = max(0, index - before)
+        end = min(len(nodes), index + after + 1)
+
+        for node in nodes[start:end]:
+            relevant[id(node)] = node
+
+    except StopIteration:
+        pass
+
+    # Preserve document order and enforce the limit.
+    selected = [node for node in nodes if id(node) in relevant]
+
+    if len(selected) > max_nodes:
+        mandatory = {
+            id(target),
+            *(
+                id(node)
+                for node in [target.parent] if node is not None
+            ),
+            *(id(node) for node in target.children),
+        }
+
+        selected_ids = mandatory
+        selected = [
+            node for node in selected if id(node) in selected_ids
+        ] + [
+            node for node in nodes
+            if id(node) in relevant and id(node) not in selected_ids
+        ][:max(0, max_nodes - len(selected_ids))]
+
+        selected.sort(key=lambda node: next(
+            i for i, item in enumerate(nodes) if item is node
+        ))
+
     return "\n".join(
         json.dumps(
-            {"id": n.id, "parent": n.parent.id if n.parent else None, "title": n.title},
+            {
+                "id": node.id,
+                "parent": node.parent.id if node.parent else None,
+                "title": node.title,
+            },
             ensure_ascii=False,
         )
-        for n in nodes
+        for node in selected
     )
 
 
@@ -739,63 +890,147 @@ def clean_references(
 
 
 async def enrich_references(
-    sections: Sequence[Section], by_id: dict[str, Section], args: argparse.Namespace
+    sections: Sequence[Section],
+    by_id: dict[str, Section],
+    args: argparse.Namespace,
 ) -> tuple[int, int]:
-    """Fill ``Section.references`` with parallel LLM requests.
+    """Fill Section.references with target-specific LLM requests."""
 
-    Worker ``k`` owns session/slot ``k`` and handles nodes k, k+W, k+2W, ...
-    Returns ``(failed_nodes, total_nodes)``.
-    """
     nodes = list(walk(sections))
+
     system_prompt = build_system_prompt(args.context)
-    listing = build_listing(nodes)
+
     slots = max(1, min(args.concurrency, len(nodes)))
     attempts = args.retries + 1
-    approx_tokens = (len(system_prompt) + len(build_user_prompt(listing, nodes[0]))) // 3
-    LOGGER.info("Each request is about %d tokens (the full TOC is sent every time); "
-                "the model context must exceed this by at least %d, for each of the "
-                "%d parallel requests.", approx_tokens, LLM_MAX_TOKENS, slots)
+
+    first_listing = build_listing(
+        nodes,
+        nodes[0],
+        max_nodes=args.context_nodes,
+    )
+
+    approx_tokens = (
+        len(system_prompt)
+        + len(build_user_prompt(first_listing, nodes[0]))
+    ) // 3
+
+    LOGGER.info(
+        "Each request is approximately %d tokens (estimated); "
+        "context nodes limit: %d; model context must exceed this "
+        "plus %d output tokens. Parallel requests: %d.",
+        approx_tokens,
+        args.context_nodes,
+        LLM_MAX_TOKENS,
+        slots,
+    )
+
     state = {"failed": 0, "done": 0}
 
     async with create_backend(args, slots) as backend:
 
         async def worker(slot: int) -> None:
+
             for index in range(slot, len(nodes), slots):
+
                 node = nodes[index]
-                LOGGER.debug("Processing node %d/%d (ID %s)...", index + 1, len(nodes), node.id)
+
+                LOGGER.debug(
+                    "Processing node %d/%d (ID %s)...",
+                    index + 1,
+                    len(nodes),
+                    node.id,
+                )
+
+                listing = build_listing(
+                    nodes,
+                    node,
+                    max_nodes=args.context_nodes,
+                )
+
                 user_prompt = build_user_prompt(listing, node)
+
                 started = time.monotonic()
                 error: Exception | None = None
-                for attempt in range(1, attempts + 1):
-                    try:
-                        content = await backend.complete(slot, system_prompt, user_prompt)
-                        raw = parse_reference_payload(content)
-                    except Exception as exc:  # network, auth, empty/invalid answer...
-                        error = exc
-                        if attempt < attempts:
-                            LOGGER.debug("Retry %d/%d for node %s: %s",
-                                         attempt, args.retries, node.id, exc)
-                            await asyncio.sleep(min(attempt, 5))
-                        continue
-                    node.references, problems = clean_references(
-                        raw, node, by_id, args.min_confidence
-                    )
-                    node.notes.extend(f"WARNING: {problem}" for problem in problems)
-                    error = None
-                    break
-                if error is not None:
-                    state["failed"] += 1
-                    node.notes.append(
-                        f"ERROR: AI inference failed after {attempts} attempt(s): {error}"
-                    )
-                state["done"] += 1
-                LOGGER.info("[%d/%d] section %s: %s (%.1fs)", state["done"], len(nodes),
-                            node.id,
-                            "FAILED" if error is not None
-                            else f"{len(node.references)} reference(s)",
-                            time.monotonic() - started)
 
-        await asyncio.gather(*(worker(slot) for slot in range(slots)))
+                for attempt in range(1, attempts + 1):
+
+                    try:
+                        content = await backend.complete(
+                            slot,
+                            system_prompt,
+                            user_prompt,
+                        )
+
+                        raw = parse_reference_payload(content)
+
+                        node.references, problems = clean_references(
+                            raw,
+                            node,
+                            by_id,
+                            args.min_confidence,
+                        )
+
+                        node.notes.extend(
+                            f"WARNING: {problem}"
+                            for problem in problems
+                        )
+
+                        error = None
+                        break
+
+                    except Exception as exc:
+
+                        error = exc
+
+                        status = getattr(exc, "status_code", None)
+
+                        if status is not None:
+                            LOGGER.error(
+                                "LLM HTTP error for section %s: "
+                                "status=%s, details=%s",
+                                node.id,
+                                status,
+                                str(exc),
+                            )
+
+                        if attempt < attempts:
+
+                            LOGGER.debug(
+                                "Retry %d/%d for node %s: %s",
+                                attempt,
+                                args.retries,
+                                node.id,
+                                exc,
+                            )
+
+                            await asyncio.sleep(min(attempt, 5))
+
+                if error is not None:
+
+                    state["failed"] += 1
+
+                    node.notes.append(
+                        f"ERROR: AI inference failed after "
+                        f"{attempts} attempt(s): {error}"
+                    )
+
+                state["done"] += 1
+
+                LOGGER.info(
+                    "[%d/%d] section %s: %s (%.1fs)",
+                    state["done"],
+                    len(nodes),
+                    node.id,
+                    "FAILED"
+                    if error is not None
+                    else f"{len(node.references)} reference(s)",
+                    time.monotonic() - started,
+                )
+
+        await asyncio.gather(
+            *(worker(slot) for slot in range(slots))
+        )
+
     return state["failed"], len(nodes)
 
 
@@ -918,7 +1153,8 @@ def check_arguments(args: argparse.Namespace) -> None:
         raise TocError("--concurrency must be at least 1.")
     if args.retries < 0:
         raise TocError("--retries must not be negative.")
-
+    if args.context_nodes < 1:
+        raise TocError("--context-nodes must be at least 1.")
 
 def run(args: argparse.Namespace, output_dir: Path) -> ExitCode:
     """Execute the PDF -> toc.yaml workflow."""

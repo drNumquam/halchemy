@@ -340,10 +340,10 @@ def assign_numbers(sections: list[Section], prefix: str = "") -> int:
     for position, section in enumerate(sections, start=1):
         match = NUMBER_PATTERN.match(section.raw_title)
         if match:
-            section.number = match.group("number")
+            section.id = match.group("number")
             section.title = match.group("title")
         else:
-            section.number = f"{prefix}{position}"
+            section.id = f"{prefix}{position}"
             section.title = section.raw_title
             fallbacks += 1
         fallbacks += assign_numbers(section.children, prefix=f"{section.number}.")

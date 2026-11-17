@@ -328,12 +328,6 @@ async def analyze_peripheral_nodes(toc_nodes: list, copilot_sessions=None):
         "- No introductory or concluding text."
     )
 
-    original_nodes = {
-        str(node["id"]): {
-            "title": node["title"],
-        }
-        for node in toc_nodes
-    }
     generated_refs = {}
 
     async def score_nodes(nodes: list, attempt=None) -> dict:
@@ -376,9 +370,9 @@ async def analyze_peripheral_nodes(toc_nodes: list, copilot_sessions=None):
         await asyncio.gather(
             *(worker(worker_number) for worker_number in range(worker_count))
         )
-        return worker_scores
+        return None
 
-    total_scores.update(await score_nodes(toc_nodes))
+    await score_nodes(toc_nodes)
 
     for attempt in range(1, 3):
         missing_nodes = [
@@ -389,28 +383,7 @@ async def analyze_peripheral_nodes(toc_nodes: list, copilot_sessions=None):
         if not missing_nodes:
             break
 
-        total_scores.update(await score_nodes(missing_nodes, attempt))
-
-    # Sort by descending confidence, then by ascending node ID to break ties.
-    sorted_pairs = sorted(
-        (
-            (score, int(node_id), node_id)
-            for node_id, score in total_scores.items()
-        ),
-        key=lambda pair: (-pair[0], pair[1])
-    )
-    sorted_scores = [(node_id, score) for score, _, node_id in sorted_pairs]
-
-    print(
-        f"\nNode results ({len(sorted_scores)}/{len(toc_nodes)} evaluated):\n"
-    )
-    print_aligned_table(sorted_scores, original_nodes)
-    print()
-    save_result_table_as_json(
-    "peripheral_nodes.json",
-    sorted_scores,
-    original_nodes
-    )
+        await score_nodes(missing_nodes, attempt)
 
     return generated_refs
 

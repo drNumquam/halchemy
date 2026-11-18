@@ -115,6 +115,11 @@
 #         table
 #         footnote
 #
+#
+# page: int
+#     Pelonging to the asset.
+#     1-based, inclusive.
+#
 # caption: str
 #     Extracted caption/title.
 #     May be empty if unavailable.
@@ -165,6 +170,7 @@
 #
 # - Asset id must be globally unique.
 # - type ∈ {figure, table, footnote}.
+# - 1 <= page <= pages.
 # - caption may be empty.
 # - 0.0 <= confidence <= 1.0.
 #
@@ -255,9 +261,13 @@ sections:
                                # table
                                # footnote
 
-        caption: ""            # OPTIONAL
+        caption: ""            # REQUIRED
                                # Asset caption/title
 
+        page: 0                # REQUIRED
+                               # Page of asset
+                               # 1-based, inclusive
+                               
         confidence: 0.0        # REQUIRED
                                # Confidence that the asset
                                # belongs to this section

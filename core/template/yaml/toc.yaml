@@ -1,23 +1,293 @@
-source: ''
-pages: 0
+# =============================================================================
+# DOCUMENT KNOWLEDGE GRAPH CONTRACT
+# =============================================================================
+#
+# This YAML represents a PDF as a hierarchical TOC enriched with
+# semantic information and cross-references.
+#
+# -----------------------------------------------------------------------------
+# ROOT OBJECT
+# -----------------------------------------------------------------------------
+#
+# source: str
+#     PDF filename.
+#     Must be non-empty.
+#
+# pages: int
+#     Total number of pages in the PDF.
+#     Must be > 0.
+#
+# sections: List[Section]
+#     Root sections in TOC preorder traversal.
+#
+# -----------------------------------------------------------------------------
+# SECTION
+# -----------------------------------------------------------------------------
+#
+# id: str
+#     Unique section identifier.
+#     Usually the printed section number.
+#     Positional fallback allowed when numbering is absent.
+#
+# title: str
+#     Section title without leading numbering.
+#
+#     Example:
+#         "Memory Management Unit"
+#
+#     Not:
+#         "4.2 Memory Management Unit"
+#
+# span_start: int
+#     First page belonging to the section.
+#     1-based, inclusive.
+#
+# span_end: int
+#     Last page belonging to the section.
+#     1-based, inclusive.
+#
+# next: int
+#     Start page of the next section in TOC preorder traversal.
+#
+#     For the last section:
+#         next = pages + 1
+#
+# summary: str
+#     Natural language summary.
+#     Must contain at most SUMMARY_SIZE words.
+#
+# is_listing: bool
+#     True if the section is primarily an index/navigation section.
+#
+#     Examples:
+#         Table of Contents
+#         Index
+#         List of Figures
+#         List of Tables
+#         Register Summary
+#
+# references: List[Reference]
+#     References originating from section text, title or summary.
+#
+# assets: List[Asset]
+#     Figures, tables and footnotes associated with the section.
+#
+# children: List[Section]
+#     Child sections.
+#     Recursive structure.
+#
+# -----------------------------------------------------------------------------
+# REFERENCE
+# -----------------------------------------------------------------------------
+#
+# id: str
+#     Target node identifier.
+#
+# type: str
+#     One of:
+#
+#         structural
+#             Explicitly referenced.
+#             Example:
+#                 "See Section 5.1"
+#
+#         semantic
+#             Conceptually related.
+#             Typically inferred by an LLM.
+#
+#         external
+#             Reference outside the document.
+#
+# confidence: float
+#     Confidence score in range [0.0, 1.0].
+#
+# -----------------------------------------------------------------------------
+# ASSET
+# -----------------------------------------------------------------------------
+#
+# id: str
+#     Globally unique asset identifier.
+#
+# type: str
+#     One of:
+#
+#         figure
+#         table
+#         footnote
+#
+# caption: str
+#     Extracted caption/title.
+#     May be empty if unavailable.
+#
+# confidence: float
+#     Confidence that the asset belongs to the current section.
+#     Range [0.0, 1.0].
+#
+# references: List[Reference]
+#     References originating from the asset content or caption.
+#
+# -----------------------------------------------------------------------------
+# VALIDATION RULES
+# -----------------------------------------------------------------------------
+#
+# DOCUMENT
+#
+# - source must not be empty.
+# - pages > 0.
+# - sections must be a list.
+# - TOC tree must be acyclic.
+#
+# SECTIONS
+#
+# - Every section id must be unique.
+# - title must not be empty.
+# - 1 <= span_start <= pages.
+# - span_start <= span_end <= pages.
+# - next > span_start.
+# - next <= pages + 1.
+# - Last section in TOC preorder:
+#       next = pages + 1.
+# - Every child span must be contained within
+#   the span of its parent.
+# - summary word count <= SUMMARY_SIZE.
+# - is_listing must be boolean.
+#
+# REFERENCES
+#
+# - type ∈ {semantic, structural, external}.
+# - 0.0 <= confidence <= 1.0.
+# - Every non-external reference target must
+#   resolve to exactly one document node.
+# - External references are exempt from target
+#   resolution validation.
+#
+# ASSETS
+#
+# - Asset id must be globally unique.
+# - type ∈ {figure, table, footnote}.
+# - caption may be empty.
+# - 0.0 <= confidence <= 1.0.
+#
+# GLOBAL GRAPH CONSTRAINT
+#
+# - All node identifiers in the document must
+#   be globally unique.
+#
+# - A node may be:
+#       section
+#       figure
+#       table
+#       footnote
+#
+# - No section id and asset id may be identical.
+#
+# - Every non-external reference target must
+#   resolve unambiguously to exactly one node.
+#
+# This guarantees deterministic graph traversal,
+# reference resolution and RAG retrieval.
+#
+# =============================================================================
+# DOCUMENT KNOWLEDGE GRAPH TEMPLATE
+# =============================================================================
+
+source: ""                     # REQUIRED
+                               # PDF filename
+                               # Must be non-empty
+
+pages: 0                       # REQUIRED
+                               # Total number of pages
+                               # Must be > 0
+
 sections:
-  - id: ''
-    title: ''
-    span_start: 0
-    span_end: 0
-    next: 0
+
+  - id: ""                     # REQUIRED
+                               # Unique section identifier
+                               # Example: "1.2.3"
+
+    title: ""                  # REQUIRED
+                               # Title without leading numbering
+
+    span_start: 0              # REQUIRED
+                               # First page of section
+                               # 1-based, inclusive
+
+    span_end: 0                # REQUIRED
+                               # Last page of section
+                               # 1-based, inclusive
+
+    next: 0                    # REQUIRED
+                               # First page of next section
+                               # in TOC preorder traversal
+                               # Last section -> pages + 1
+
+    summary: ""                # REQUIRED
+                               # <= SUMMARY_SIZE words
+
+    is_listing: false          # REQUIRED
+
     references:
-      - id: ''
-        type: ''
-        confidence: 0.0
-    children: 
-      - id: ''
-        title: ''
+
+      - id: ""                 # REQUIRED
+                               # Target node identifier
+                               # May reference:
+                               # - section
+                               # - figure
+                               # - table
+                               # - footnote
+                               # - external resource
+
+        type: ""               # REQUIRED
+                               # semantic
+                               # structural
+                               # external
+
+        confidence: 0.0        # REQUIRED
+                               # Range [0.0, 1.0]
+
+    assets:
+
+      - id: ""                 # REQUIRED
+                               # Globally unique asset identifier
+
+        type: ""               # REQUIRED
+                               # figure
+                               # table
+                               # footnote
+
+        caption: ""            # OPTIONAL
+                               # Asset caption/title
+
+        confidence: 0.0        # REQUIRED
+                               # Confidence that the asset
+                               # belongs to this section
+                               # Range [0.0, 1.0]
+
+        references:
+
+          - id: ""             # REQUIRED
+                               # Target node identifier
+
+            type: ""           # REQUIRED
+                               # semantic
+                               # structural
+                               # external
+
+            confidence: 0.0    # REQUIRED
+                               # Range [0.0, 1.0]
+
+    children:
+
+      - id: ""
+        title: ""
         span_start: 0
         span_end: 0
         next: 0
-        references:
-          - id: ''
-            type: ''
-            confidence: 0.0
+        summary: ""
+        is_listing: false
+
+        references: []
+
+        assets: []
+
         children: []

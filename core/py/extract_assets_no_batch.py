@@ -51,20 +51,29 @@ from docling_core.types.doc import (
 DEFAULT_MIN_IMAGE_PX = 48
 CHECKPOINT_VERSION = 3
 EXCERPT_CHARS = 160
+
 INTRO_SECTION_ID = "sec_00000_front_matter"
 
 TOP_MAX_FRAC = 0.20
 BOTTOM_MIN_FRAC = 0.80
+
 CONFIDENCE_RANK = {"medium": 1, "high": 2}
+
 HIGH_CONFIDENCE_REASONS = frozenset(
     {"header_repeated", "caption_marked_continued", "sequential_row_keys"}
 )
+
 CONTINUED_MARKER_RE = re.compile(
-    r"\(?\s*(?:continued|cont\.?)\s*\)?\s*$", re.IGNORECASE
+    r"\(?\s*(?:continued|cont\.?)\s*\)?\s*$",
+    re.IGNORECASE,
 )
 
 SKIPPED_TEXT_LABELS = frozenset(
-    {DocItemLabel.PAGE_HEADER, DocItemLabel.PAGE_FOOTER, DocItemLabel.CAPTION}
+    {
+        DocItemLabel.PAGE_HEADER,
+        DocItemLabel.PAGE_FOOTER,
+        DocItemLabel.CAPTION,
+    }
 )
 
 HEADING_NUMBER_RE = re.compile(
@@ -72,12 +81,17 @@ HEADING_NUMBER_RE = re.compile(
     r"|([0-9]+(?:\.[0-9]+)*))\b",
     re.IGNORECASE,
 )
+
 TABLE_NUMBER_RE = re.compile(
-    r"(?:Table|Tbl\.?)\s+([A-Z0-9]+(?:[.\-][0-9]+)*)", re.IGNORECASE
+    r"(?:Table|Tbl\.?)\s+([A-Z0-9]+(?:[.\-][0-9]+)*)",
+    re.IGNORECASE,
 )
+
 FIGURE_NUMBER_RE = re.compile(
-    r"(?:Figure|Fig\.?)\s+([A-Z0-9]+(?:[.\-][0-9]+)*)", re.IGNORECASE
+    r"(?:Figure|Fig\.?)\s+([A-Z0-9]+(?:[.\-][0-9]+)*)",
+    re.IGNORECASE,
 )
+
 FOOTNOTE_NUMBER_RE = re.compile(r"^\[?(\d+)\]?[.)\s]")
 
 log = logging.getLogger("docling_extractor")
@@ -102,6 +116,7 @@ class _PageContextFilter(logging.Filter):
 def page_context(label: str) -> Iterator[None]:
     previous = _PageContextFilter.current
     _PageContextFilter.current = label
+
     try:
         yield
     finally:
@@ -121,7 +136,9 @@ class _WarningCollector(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         if record.name == log.name or len(self.messages) >= self.MAX_KEPT:
             return
+
         message = record.getMessage()[: self.MAX_LEN]
+
         if message not in self.messages:
             self.messages.append(message)
 
@@ -130,8 +147,10 @@ class _WarningCollector(logging.Handler):
 def collect_warnings(enabled: bool = True) -> Iterator[list[str]]:
     collector = _WarningCollector()
     root = logging.getLogger()
+
     if enabled:
         root.addHandler(collector)
+
     try:
         yield collector.messages
     finally:
@@ -145,19 +164,28 @@ class _BlankAwareFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         if not record.getMessage():
             return ""
+
         return super().format(record)
 
 
 def configure_logging() -> None:
     handler = logging.StreamHandler(sys.stdout)
+    handler.setLevel(logging.INFO)
     handler.addFilter(_PageContextFilter())
+
     handler.setFormatter(
         _BlankAwareFormatter(
             "[%(asctime)s] %(levelname)-8s [%(pages)s] %(message)s",
             datefmt="%H:%M:%S",
         )
     )
-    logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=[handler],
+        force=True,
+    )
+
     logging.captureWarnings(True)
 
 
@@ -168,39 +196,59 @@ def configure_logging() -> None:
 
 def slugify(text: str, fallback: str) -> str:
     clean = re.sub(
-        r"[^a-zA-Z0-9._-]+", "_", text.strip().lower()
+        r"[^a-zA-Z0-9._-]+",
+        "_",
+        text.strip().lower(),
     ).strip("_")
+
     return clean[:60] if clean else fallback
 
 
 def atomic_write_text(path: Path, text: str) -> None:
     """Atomically replace a UTF-8 text file."""
     path.parent.mkdir(parents=True, exist_ok=True)
+
     fd, tmp_name = tempfile.mkstemp(
-        dir=path.parent, prefix=path.name, suffix=".tmp"
+        dir=path.parent,
+        prefix=path.name,
+        suffix=".tmp",
     )
+
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
+
         os.replace(tmp_name, path)
+
     except BaseException:
         with contextlib.suppress(OSError):
             os.unlink(tmp_name)
+
         raise
 
 
 def atomic_write_json(path: Path, payload: Any) -> None:
     atomic_write_text(
         path,
-        json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        ),
     )
 
 
 def _format_duration(seconds: float) -> str:
     total = int(seconds)
-    return f"{total // 3600:02d}:{total % 3600 // 60:02d}:{total % 60:02d}"
+
+    return (
+        f"{total // 3600:02d}:"
+        f"{total % 3600 // 60:02d}:"
+        f"{total % 60:02d}"
+    )
 
 
 def count_pdf_pages(pdf_path: Path) -> int:
@@ -213,9 +261,12 @@ def describe_page(pdf_path: Path, page_no: int) -> str:
     try:
         with pymupdf.open(str(pdf_path)) as doc:
             text = doc[page_no - 1].get_text("text")
+
     except Exception as exc:  # noqa: BLE001
         return f"<page text unavailable: {exc}>"
+
     flat = " ".join(text.split())
+
     return flat[:EXCERPT_CHARS] if flat else "<no extractable text>"
 
 
@@ -333,7 +384,11 @@ class ExtractionState:
                 "footnote": 0,
             },
             current_section=_new_section(
-                INTRO_SECTION_ID, "0", "Front Matter & Introduction", 1, 1
+                INTRO_SECTION_ID,
+                "0",
+                "Front Matter & Introduction",
+                1,
+                1,
             ),
             index=_new_index(fingerprint["pdf_name"]),
         )
@@ -344,7 +399,11 @@ class ExtractionState:
 # --------------------------------------------------------------------------- #
 
 
-def table_geometry(doc: Any, item: Any, page_no: int) -> dict[str, Any]:
+def table_geometry(
+    doc: Any,
+    item: Any,
+    page_no: int,
+) -> dict[str, Any]:
     info: dict[str, Any] = {
         "page_height": None,
         "top_frac": None,
@@ -357,15 +416,25 @@ def table_geometry(doc: Any, item: Any, page_no: int) -> dict[str, Any]:
         "first_data_key": None,
         "last_data_key": None,
     }
+
     try:
         data = item.data
+
         info["num_rows"] = int(data.num_rows)
         info["num_cols"] = int(data.num_cols)
-        header = [cell for cell in data.table_cells if cell.column_header]
+
+        header = [
+            cell
+            for cell in data.table_cells
+            if cell.column_header
+        ]
+
         if header:
             info["header_rows"] = max(
-                cell.end_row_offset_idx for cell in header
+                cell.end_row_offset_idx
+                for cell in header
             )
+
             ordered = sorted(
                 header,
                 key=lambda c: (
@@ -373,18 +442,28 @@ def table_geometry(doc: Any, item: Any, page_no: int) -> dict[str, Any]:
                     c.start_col_offset_idx,
                 ),
             )
+
             info["header_signature"] = [
-                cell.text.strip() for cell in ordered
+                cell.text.strip()
+                for cell in ordered
             ]
 
         by_col: dict[int, list[tuple[float, float]]] = {}
+
         for cell in data.table_cells:
             if cell.column_header:
                 bbox = getattr(cell, "bbox", None)
+
                 if bbox is not None:
                     by_col.setdefault(
-                        int(cell.start_col_offset_idx), []
-                    ).append((float(bbox.l), float(bbox.r)))
+                        int(cell.start_col_offset_idx),
+                        [],
+                    ).append(
+                        (
+                            float(bbox.l),
+                            float(bbox.r),
+                        )
+                    )
 
         if by_col:
             info["column_x_signature"] = [
@@ -396,48 +475,78 @@ def table_geometry(doc: Any, item: Any, page_no: int) -> dict[str, Any]:
             ]
 
         data_rows: dict[int, dict[int, str]] = {}
+
         for cell in data.table_cells:
             if not cell.column_header:
                 r = int(cell.start_row_offset_idx)
                 c = int(cell.start_col_offset_idx)
-                data_rows.setdefault(r, {})[c] = str(cell.text).strip()
+
+                data_rows.setdefault(r, {})[c] = str(
+                    cell.text
+                ).strip()
 
         if data_rows:
             row_ids = sorted(data_rows)
-            info["first_data_key"] = data_rows[row_ids[0]].get(0) or None
-            info["last_data_key"] = data_rows[row_ids[-1]].get(0) or None
+
+            info["first_data_key"] = (
+                data_rows[row_ids[0]].get(0) or None
+            )
+
+            info["last_data_key"] = (
+                data_rows[row_ids[-1]].get(0) or None
+            )
 
     except Exception:  # noqa: BLE001
-        log.debug("No table data on page %d", page_no, exc_info=True)
+        log.debug(
+            "No table data on page %d",
+            page_no,
+            exc_info=True,
+        )
 
     try:
         prov = item.prov[0]
         height = float(doc.pages[prov.page_no].size.height)
         box = prov.bbox.to_top_left_origin(height)
+
         info["page_height"] = height
+
         info["top_frac"] = round(
-            min(max(box.t / height, 0.0), 1.0), 4
+            min(max(box.t / height, 0.0), 1.0),
+            4,
         )
+
         info["bottom_frac"] = round(
-            min(max(box.b / height, 0.0), 1.0), 4
+            min(max(box.b / height, 0.0), 1.0),
+            4,
         )
+
     except Exception:  # noqa: BLE001
-        log.debug("No table geometry on page %d", page_no, exc_info=True)
+        log.debug(
+            "No table geometry on page %d",
+            page_no,
+            exc_info=True,
+        )
 
     return info
 
 
 def _norm_header(signature: list[str]) -> list[str]:
-    return [" ".join(text.lower().split()) for text in signature]
+    return [
+        " ".join(text.lower().split())
+        for text in signature
+    ]
 
 
 def _same_column_layout(
-    prev: dict[str, Any], curr: dict[str, Any]
+    prev: dict[str, Any],
+    curr: dict[str, Any],
 ) -> bool:
     a = prev.get("column_x_signature") or []
     b = curr.get("column_x_signature") or []
+
     if not a or len(a) != len(b):
         return False
+
     try:
         return all(
             abs(float(x1) - float(y1)) <= 3.0
@@ -447,26 +556,33 @@ def _same_column_layout(
                 (left[0], left[1], right[0], right[1])
             ]
         )
+
     except (TypeError, ValueError, IndexError):
         return False
 
 
 def _sequential_row_keys(
-    prev: dict[str, Any], curr: dict[str, Any]
+    prev: dict[str, Any],
+    curr: dict[str, Any],
 ) -> bool:
     a = prev.get("last_data_key")
     b = curr.get("first_data_key")
+
     if not a or not b:
         return False
+
     ma = re.fullmatch(r"(.*?)(\d+)", str(a).strip())
     mb = re.fullmatch(r"(.*?)(\d+)", str(b).strip())
+
     if (
         not ma
         or not mb
         or ma.group(1).casefold() != mb.group(1).casefold()
     ):
         return False
+
     na, nb = ma.group(2), mb.group(2)
+
     return len(na) == len(nb) and int(nb) == int(na) + 1
 
 
@@ -481,6 +597,7 @@ def _continuation_reasons(
     prev_bottom = prev.get("bottom_frac")
     curr_top = curr.get("top_frac")
     cols = curr.get("num_cols") or 0
+
     if cols == 0 or cols != prev.get("num_cols"):
         return None
 
@@ -491,8 +608,14 @@ def _continuation_reasons(
         and curr_top <= TOP_MAX_FRAC
     )
 
-    curr_header = _norm_header(curr.get("header_signature") or [])
-    prev_header = _norm_header(prev.get("header_signature") or [])
+    curr_header = _norm_header(
+        curr.get("header_signature") or []
+    )
+
+    prev_header = _norm_header(
+        prev.get("header_signature") or []
+    )
+
     structural_match = (
         bool(curr_header)
         and curr_header == prev_header
@@ -504,8 +627,10 @@ def _continuation_reasons(
         return None
 
     reasons = ["next_page", "same_cols"]
+
     if edge_match:
         reasons.append("bottom_to_top")
+
     if structural_match:
         reasons.extend(
             [
@@ -516,20 +641,24 @@ def _continuation_reasons(
         )
 
     caption = (curr.get("caption") or "").strip()
+
     if caption:
         if CONTINUED_MARKER_RE.search(caption):
             reasons.append("caption_marked_continued")
+
         elif (
             curr.get("is_numbered")
             and prev.get("is_numbered")
             and curr.get("label_number") == prev.get("label_number")
         ):
             reasons.append("caption_repeated")
+
         else:
             return None
 
     root = prev
     seen = {prev["id"]}
+
     while (
         root.get("continues_from") in by_id
         and root["continues_from"] not in seen
@@ -537,7 +666,10 @@ def _continuation_reasons(
         root = by_id[root["continues_from"]]
         seen.add(root["id"])
 
-    root_sig = _norm_header(root.get("header_signature") or [])
+    root_sig = _norm_header(
+        root.get("header_signature") or []
+    )
+
     if (
         curr_header
         and curr_header == root_sig
@@ -551,8 +683,15 @@ def _continuation_reasons(
 def detect_continuations(
     tables: list[dict[str, Any]],
 ) -> dict[str, int]:
-    by_id = {t["id"]: t for t in tables}
-    counts = {"high": 0, "medium": 0}
+    by_id = {
+        table["id"]: table
+        for table in tables
+    }
+
+    counts = {
+        "high": 0,
+        "medium": 0,
+    }
 
     for position, curr in enumerate(tables):
         curr["continues_from"] = None
@@ -563,8 +702,11 @@ def detect_continuations(
             continue
 
         reasons = _continuation_reasons(
-            tables[position - 1], curr, by_id
+            tables[position - 1],
+            curr,
+            by_id,
         )
+
         if reasons is None:
             continue
 
@@ -573,9 +715,11 @@ def detect_continuations(
             if HIGH_CONFIDENCE_REASONS & set(reasons)
             else "medium"
         )
+
         curr["continues_from"] = tables[position - 1]["id"]
         curr["continuation_confidence"] = confidence
         curr["continuation_reasons"] = reasons
+
         counts[confidence] += 1
 
     return counts
@@ -601,21 +745,33 @@ def _add_issue(
 
 
 def _accepted_links(
-    tables: list[dict[str, Any]], min_confidence: str
+    tables: list[dict[str, Any]],
+    min_confidence: str,
 ) -> tuple[dict[str, str], list[tuple[int, str]]]:
-    by_id = {t["id"]: t for t in tables}
-    order = {t["id"]: n for n, t in enumerate(tables)}
+    by_id = {
+        table["id"]: table
+        for table in tables
+    }
+
+    order = {
+        table["id"]: n
+        for n, table in enumerate(tables)
+    }
+
     min_rank = CONFIDENCE_RANK[min_confidence]
+
     parent_of: dict[str, str] = {}
     claimed: dict[str, str] = {}
     warnings: list[tuple[int, str]] = []
 
     for table in tables:
         parent = table.get("continues_from")
+
         if not parent:
             continue
 
         tid = table["id"]
+
         if parent not in by_id or parent == tid:
             warnings.append(
                 (
@@ -626,6 +782,7 @@ def _accepted_links(
             continue
 
         confidence = table.get("continuation_confidence")
+
         if (
             confidence is not None
             and CONFIDENCE_RANK.get(confidence, 0) < min_rank
@@ -662,7 +819,8 @@ def _build_grid(
     cells: list[dict[str, Any]],
 ) -> list[list[dict[str, Any]]]:
     grid: list[list[Optional[dict[str, Any]]]] = [
-        [None] * cols for _ in range(rows)
+        [None] * cols
+        for _ in range(rows)
     ]
 
     for cell in cells:
@@ -698,17 +856,27 @@ def _build_grid(
 
 
 def merge_table_data(
-    parts: list[tuple[dict[str, Any], dict[str, Any]]]
+    parts: list[tuple[dict[str, Any], dict[str, Any]]],
 ) -> dict[str, Any]:
     first_meta, first_data = parts[0]
-    first_sig = _norm_header(first_meta.get("header_signature") or [])
+
+    first_sig = _norm_header(
+        first_meta.get("header_signature") or []
+    )
+
     cells: list[dict[str, Any]] = []
     rows = 0
-    cols = max(int(data.get("num_cols", 0)) for _, data in parts)
+
+    cols = max(
+        int(data.get("num_cols", 0))
+        for _, data in parts
+    )
+
     info: list[dict[str, Any]] = []
 
     for position, (meta, data) in enumerate(parts):
         skip = 0
+
         if (
             position
             and first_sig
@@ -717,20 +885,26 @@ def merge_table_data(
             skip = int(meta.get("header_rows") or 0)
 
         shift = rows - skip
+
         for cell in data.get("table_cells", []):
             if cell["start_row_offset_idx"] < skip:
                 continue
 
             merged_cell = dict(cell)
+
             merged_cell["start_row_offset_idx"] += shift
             merged_cell["end_row_offset_idx"] += shift
+
             if position:
                 merged_cell["column_header"] = False
+
             merged_cell["source_table"] = meta["id"]
             merged_cell["source_page"] = meta["page"]
+
             cells.append(merged_cell)
 
         rows += int(data.get("num_rows", 0)) - skip
+
         info.append(
             {
                 "id": meta["id"],
@@ -740,10 +914,16 @@ def merge_table_data(
         )
 
     merged = {
-        k: v
-        for k, v in first_data.items()
-        if k not in ("table_cells", "grid", "num_rows", "num_cols")
+        key: value
+        for key, value in first_data.items()
+        if key not in (
+            "table_cells",
+            "grid",
+            "num_rows",
+            "num_cols",
+        )
     }
+
     merged.update(
         num_rows=rows,
         num_cols=cols,
@@ -755,39 +935,59 @@ def merge_table_data(
             "page_end": parts[-1][0]["page"],
         },
     )
+
     return merged
 
 
 def _md_cell(text: str) -> str:
-    return " ".join(str(text).split()).replace("|", "\\|")
+    return " ".join(
+        str(text).split()
+    ).replace("|", "\\|")
 
 
 def merged_table_markdown(
-    merged: dict[str, Any], caption: str
+    merged: dict[str, Any],
+    caption: str,
 ) -> str:
     rows = merged["num_rows"]
     cols = merged["num_cols"]
-    matrix = [[""] * cols for _ in range(rows)]
+
+    matrix = [
+        [""] * cols
+        for _ in range(rows)
+    ]
 
     for cell in merged["table_cells"]:
         r = cell["start_row_offset_idx"]
         c = cell["start_col_offset_idx"]
+
         if r < rows and c < cols:
-            matrix[r][c] = _md_cell(cell.get("text", ""))
+            matrix[r][c] = _md_cell(
+                cell.get("text", "")
+            )
 
     lines = []
+
     if caption:
         info = merged["merge_info"]
+
         lines.append(
             f"**{caption} (pages {info['page_start']}-{info['page_end']}, "
             f"merged from {len(info['parts'])} parts)**\n"
         )
 
     if rows:
-        lines.append("| " + " | ".join(matrix[0]) + " |")
-        lines.append("|" + "|".join(["---"] * cols) + "|")
+        lines.append(
+            "| " + " | ".join(matrix[0]) + " |"
+        )
+
+        lines.append(
+            "|" + "|".join(["---"] * cols) + "|"
+        )
+
         lines.extend(
-            "| " + " | ".join(row) + " |" for row in matrix[1:]
+            "| " + " | ".join(row) + " |"
+            for row in matrix[1:]
         )
 
     return "\n".join(lines) + "\n"
@@ -799,73 +999,128 @@ def merge_tables(
     min_confidence: str = "high",
 ) -> int:
     tables = index["tables"]
+
     for table in tables:
         table.pop("merged_into", None)
+
     index["merged_tables"] = []
 
-    parent_of, warnings = _accepted_links(tables, min_confidence)
-    for page, message in warnings:
-        log.warning("Table merge: PDF page %d | %s", page, message)
-        _add_issue(index, page, "warning", "merge", message)
+    parent_of, warnings = _accepted_links(
+        tables,
+        min_confidence,
+    )
 
-    by_id = {t["id"]: t for t in tables}
-    child_of = {
-        parent: child for child, parent in parent_of.items()
+    for page, message in warnings:
+        log.warning(
+            "Table merge: PDF page %d | %s",
+            page,
+            message,
+        )
+
+        _add_issue(
+            index,
+            page,
+            "warning",
+            "merge",
+            message,
+        )
+
+    by_id = {
+        table["id"]: table
+        for table in tables
     }
+
+    child_of = {
+        parent: child
+        for child, parent in parent_of.items()
+    }
+
     merged_count = 0
 
     roots = (
-        t
-        for t in tables
-        if t["id"] not in parent_of and t["id"] in child_of
+        table
+        for table in tables
+        if table["id"] not in parent_of
+        and table["id"] in child_of
     )
 
     for root in roots:
         chain = [root]
+
         while chain[-1]["id"] in child_of:
-            chain.append(by_id[child_of[chain[-1]["id"]]])
+            chain.append(
+                by_id[child_of[chain[-1]["id"]]]
+            )
 
         try:
             parts = [
                 (
                     meta,
                     json.loads(
-                        (layout.root / meta["json_path"]).read_text(
-                            encoding="utf-8"
-                        )
+                        (
+                            layout.root / meta["json_path"]
+                        ).read_text(encoding="utf-8")
                     ),
                 )
                 for meta in chain
             ]
+
         except (OSError, ValueError) as exc:
             message = (
                 f"cannot merge chain starting at {root['id']}: {exc}"
             )
+
             log.warning(
                 "Table merge: PDF page %d | %s",
                 root["page"],
                 message,
             )
-            _add_issue(index, root["page"], "warning", "merge", message)
+
+            _add_issue(
+                index,
+                root["page"],
+                "warning",
+                "merge",
+                message,
+            )
+
             continue
 
         merged = merge_table_data(parts)
+
         merged_id = f"{root['id']}_merged"
-        layout.tables_merged.mkdir(parents=True, exist_ok=True)
-        json_file = layout.tables_merged / f"{merged_id}.json"
-        md_file = layout.tables_merged / f"{merged_id}.md"
+
+        layout.tables_merged.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        json_file = (
+            layout.tables_merged / f"{merged_id}.json"
+        )
+
+        md_file = (
+            layout.tables_merged / f"{merged_id}.md"
+        )
 
         atomic_write_json(json_file, merged)
+
         atomic_write_text(
             md_file,
-            merged_table_markdown(merged, root.get("caption", "")),
+            merged_table_markdown(
+                merged,
+                root.get("caption", ""),
+            ),
         )
 
         index["merged_tables"].append(
             {
                 "id": merged_id,
                 "root_table": root["id"],
-                "parts": [m["id"] for m in chain],
+                "parts": [
+                    meta["id"]
+                    for meta in chain
+                ],
                 "page_start": chain[0]["page"],
                 "page_end": chain[-1]["page"],
                 "num_rows": merged["num_rows"],
@@ -880,8 +1135,9 @@ def merge_tables(
             meta["merged_into"] = merged_id
 
         merged_count += 1
+
         log.info(
-            "Merged %d parts (pages %d-%d) -> %s",
+            "[TABLE MERGED] %d parti | pagine %d-%d | %s",
             len(chain),
             chain[0]["page"],
             chain[-1]["page"],
@@ -897,16 +1153,29 @@ def merge_tables(
 
 
 def _continuation_report_lines(
-    index: dict[str, Any], sub: str
+    index: dict[str, Any],
+    sub: str,
 ) -> list[str]:
     tables = index["tables"]
-    links = [t for t in tables if t.get("continues_from")]
+
+    links = [
+        table
+        for table in tables
+        if table.get("continues_from")
+    ]
+
     high = sum(
-        1 for t in links if t.get("continuation_confidence") == "high"
+        1
+        for table in links
+        if table.get("continuation_confidence") == "high"
     )
+
     medium = sum(
-        1 for t in links if t.get("continuation_confidence") == "medium"
+        1
+        for table in links
+        if table.get("continuation_confidence") == "medium"
     )
+
     merged = index.get("merged_tables", [])
 
     lines = [
@@ -923,11 +1192,17 @@ def _continuation_report_lines(
             f"{entry['num_rows']}x{entry['num_cols']}"
         )
 
-    unmerged = [t for t in links if not t.get("merged_into")]
+    unmerged = [
+        table
+        for table in links
+        if not table.get("merged_into")
+    ]
+
     if unmerged:
         lines.append(
             f"Links NOT merged ({len(unmerged)}; review or lower --merge-min-confidence):"
         )
+
         for table in unmerged[:50]:
             lines.append(
                 f"  page {table['page'] - 1} -> {table['page']} "
@@ -948,25 +1223,42 @@ def build_report(
     note: Optional[str] = None,
 ) -> str:
     total_pages = state.fingerprint["total_pages"]
+
     issues = sorted(
         state.index["issues"],
-        key=lambda i: (i["page"], i["severity"]),
+        key=lambda issue: (
+            issue["page"],
+            issue["severity"],
+        ),
     )
-    errors = [i for i in issues if i["severity"] == "error"]
-    warnings_ = [i for i in issues if i["severity"] == "warning"]
+
+    errors = [
+        issue
+        for issue in issues
+        if issue["severity"] == "error"
+    ]
+
+    warnings_ = [
+        issue
+        for issue in issues
+        if issue["severity"] == "warning"
+    ]
 
     if aborted or not state.finished:
         status = (
             "INCOMPLETE (single-pass extraction interrupted; "
             "no resumable intermediate checkpoint)"
         )
+
     elif errors:
         status = "COMPLETE WITH ERRORS"
+
     else:
         status = "COMPLETE"
 
     rule = "=" * 72
     sub = "-" * 72
+
     lines: list[str] = [
         rule,
         "DOCLING EXTRACTION REPORT",
@@ -979,9 +1271,11 @@ def build_report(
         f"PDF            : {pdf_path}",
         f"Total pages    : {total_pages}",
         f"Pages processed: {total_pages if state.finished else 'incomplete'}",
-        note
-        if note is not None
-        else f"This run       : single-pass conversion in {_format_duration(elapsed_s)}",
+        (
+            note
+            if note is not None
+            else f"This run       : single-pass conversion in {_format_duration(elapsed_s)}"
+        ),
         "Conversion     : entire PDF in one pass, with page-level retry on problems",
         f"Min figure size: {min_image_px}px",
         "",
@@ -999,17 +1293,45 @@ def build_report(
         sub,
         f"Errors         : {len(errors)}",
         f"Warnings       : {len(warnings_)}",
-        f"Error pages    : {', '.join(str(p) for p in sorted({i['page'] for i in errors})) or '-'}",
-        f"Warning pages  : {', '.join(str(p) for p in sorted({i['page'] for i in warnings_})) or '-'}",
+        (
+            "Error pages    : "
+            + (
+                ", ".join(
+                    str(page)
+                    for page in sorted(
+                        {issue["page"] for issue in errors}
+                    )
+                )
+                or "-"
+            )
+        ),
+        (
+            "Warning pages  : "
+            + (
+                ", ".join(
+                    str(page)
+                    for page in sorted(
+                        {issue["page"] for issue in warnings_}
+                    )
+                )
+                or "-"
+            )
+        ),
     ]
 
     if issues:
-        lines += ["", "ISSUE DETAILS (sorted by PDF page)", sub]
+        lines += [
+            "",
+            "ISSUE DETAILS (sorted by PDF page)",
+            sub,
+        ]
+
         for n, issue in enumerate(issues, start=1):
             lines.append(
                 f"{n:>3}. PDF page {issue['page']} | "
                 f"{issue['severity'].upper()} | {issue['stage']}"
             )
+
             lines.append(
                 textwrap.fill(
                     f"Message  : {issue['message']}",
@@ -1018,6 +1340,7 @@ def build_report(
                     subsequent_indent="              ",
                 )
             )
+
             lines.append(
                 textwrap.fill(
                     f"Page text: {issue.get('page_excerpt') or '-'}",
@@ -1026,6 +1349,7 @@ def build_report(
                     subsequent_indent="              ",
                 )
             )
+
             lines.append(
                 f"     Page copy: {issue.get('page_pdf') or '<not saved>'}"
             )
@@ -1048,7 +1372,11 @@ def build_report(
             f"Merged tables  : {layout.rel(layout.tables_merged)}/"
         )
 
-    lines += [rule, ""]
+    lines += [
+        rule,
+        "",
+    ]
+
     return "\n".join(lines)
 
 
@@ -1059,12 +1387,15 @@ def build_report(
 
 def release_memory() -> None:
     gc.collect()
+
     try:
         import torch  # noqa: WPS433
+
     except ImportError:
         return
 
     mps = getattr(torch.backends, "mps", None)
+
     if mps is not None and mps.is_available():
         torch.mps.empty_cache()
 
@@ -1092,14 +1423,17 @@ class ManualExtractor:
         self.locate_warnings = locate_warnings
         self.merge_tables_enabled = merge_tables
         self.merge_min_confidence = merge_min_confidence
+
         self.total_pages = 0
         self.converter = self._create_converter()
+
         self.state: ExtractionState
         self._started_at = time.monotonic()
 
     @staticmethod
     def _create_converter() -> DocumentConverter:
         opts = PdfPipelineOptions()
+
         opts.do_ocr = False
         opts.do_table_structure = True
         opts.table_structure_options.mode = TableFormerMode.ACCURATE
@@ -1117,6 +1451,7 @@ class ManualExtractor:
     def run(self) -> int:
         """Run extraction. Returns 0 on success and 3 if errors were recorded."""
         self.layout.create()
+
         self.total_pages = count_pdf_pages(self.pdf_path)
 
         fingerprint = {
@@ -1124,18 +1459,27 @@ class ManualExtractor:
             "pdf_size": self.pdf_path.stat().st_size,
             "total_pages": self.total_pages,
         }
+
         self.state = ExtractionState.fresh(fingerprint)
         self._started_at = time.monotonic()
+
         self.state.settings = {
             "conversion_mode": "single_pass",
             "min_image_px": self.min_image_px,
             "locate_warnings": self.locate_warnings,
         }
 
-        log.info("=== DOCLING ASSET EXTRACTOR ===")
+        log.info("=" * 72)
+        log.info("DOCLING ASSET EXTRACTOR")
+        log.info("=" * 72)
         log.info("PDF        : %s", self.pdf_path)
         log.info("Pages      : %d", self.total_pages)
         log.info("Conversion : entire document in one pass")
+        log.info("OCR        : disabled")
+        log.info("Tables     : accurate mode")
+        log.info("Images     : enabled")
+        log.info("Output     : %s", self.layout.root)
+        log.info("=" * 72)
 
         try:
             with page_context(f"p1-{self.total_pages}"):
@@ -1149,6 +1493,7 @@ class ManualExtractor:
                 "Run aborted. The single-pass conversion has no intermediate "
                 "checkpoint; restart the extraction from page 1."
             )
+
             self._write_report(aborted=True)
             raise
 
@@ -1156,6 +1501,7 @@ class ManualExtractor:
             issue["severity"] == "error"
             for issue in self.state.index["issues"]
         )
+
         return 3 if has_errors else 0
 
     def _convert(
@@ -1167,65 +1513,173 @@ class ManualExtractor:
         with collect_warnings(self.locate_warnings) as warned:
             try:
                 if first is None and last is None:
-                    result = self.converter.convert(str(self.pdf_path))
+                    result = self.converter.convert(
+                        str(self.pdf_path)
+                    )
+
                 elif first is not None and last is not None:
                     result = self.converter.convert(
                         str(self.pdf_path),
                         page_range=(first, last),
                     )
+
                 else:
                     raise ValueError(
                         "Both first and last page must be supplied together"
                     )
+
             except Exception as exc:  # noqa: BLE001
-                log.debug("Docling conversion raised", exc_info=True)
+                log.debug(
+                    "Docling conversion raised",
+                    exc_info=True,
+                )
+
                 return None, f"{type(exc).__name__}: {exc}"
 
         problems: list[str] = []
+
         if result.status != ConversionStatus.SUCCESS:
-            problems.append(f"status={result.status.name}")
+            problems.append(
+                f"status={result.status.name}"
+            )
 
         for err in getattr(result, "errors", None) or []:
             problems.append(
-                str(getattr(err, "error_message", None) or repr(err))
+                str(
+                    getattr(err, "error_message", None)
+                    or repr(err)
+                )
             )
 
         problems.extend(
-            f"docling warning: {message}" for message in warned
+            f"docling warning: {message}"
+            for message in warned
         )
-        return result, ("; ".join(problems) or None)
+
+        return result, (
+            "; ".join(problems)
+            or None
+        )
 
     def _process_document(self) -> None:
         """Convert the whole PDF; retry page by page if conversion reports problems."""
-        log.info("[CONVERSION START] pages=1-%d", self.total_pages)
+        log.info(
+            "[CONVERSION START] Avvio conversione integrale: %d pagine",
+            self.total_pages,
+        )
+
+        log.info(
+            "[CONVERSION] Docling sta analizzando il PDF. "
+            "L'avanzamento interno per pagina non è esposto da Docling."
+        )
+
+        started = time.monotonic()
+
         result, problem = self._convert()
 
+        conversion_time = time.monotonic() - started
+
         if problem is None and result is not None:
-            log.info("[CONVERSION COMPLETE] whole document converted successfully")
-            self._consume(result, default_page=1)
+            log.info(
+                "[CONVERSION COMPLETE] Documento convertito in %s",
+                _format_duration(conversion_time),
+            )
+
+            log.info(
+                "[EXTRACTION START] Inizio estrazione degli elementi"
+            )
+
+            extraction_started = time.monotonic()
+
+            self._consume(
+                result,
+                default_page=1,
+            )
+
+            log.info(
+                "[EXTRACTION COMPLETE] Estrazione completata in %s",
+                _format_duration(
+                    time.monotonic() - extraction_started
+                ),
+            )
+
             del result
             release_memory()
+
             return
 
         log.warning(
-            "Whole-document conversion reported a problem (%s). "
-            "Retrying page by page to isolate problematic pages.",
-            (problem or "no conversion result")[:500],
+            "[CONVERSION WARNING] Conversione integrale problematica: %s",
+            (problem or "nessun risultato di conversione")[:500],
+        )
+
+        log.warning(
+            "[RECOVERY START] Avvio conversione individuale delle %d pagine",
+            self.total_pages,
         )
 
         if result is not None:
             del result
             release_memory()
 
+        recovery_started = time.monotonic()
+
+        successful_pages = 0
+        failed_pages = 0
+
         for page in range(1, self.total_pages + 1):
-            with page_context(f"p{page}"):
-                page_result, page_problem = self._convert(page, page)
-                self._handle_page_result(
+            page_started = time.monotonic()
+
+            with page_context(
+                f"p{page}/{self.total_pages}"
+            ):
+                log.info(
+                    "[PAGE %d/%d] Conversione pagina in corso...",
                     page,
-                    page_result,
-                    page_problem,
+                    self.total_pages,
                 )
+
+                page_result, page_problem = self._convert(
+                    page,
+                    page,
+                )
+
+                if page_result is None:
+                    failed_pages += 1
+
+                    self._handle_page_result(
+                        page,
+                        page_result,
+                        page_problem,
+                    )
+
+                else:
+                    successful_pages += 1
+
+                    self._handle_page_result(
+                        page,
+                        page_result,
+                        page_problem,
+                    )
+
+                log.info(
+                    "[PAGE %d/%d] Completata in %.1f secondi",
+                    page,
+                    self.total_pages,
+                    time.monotonic() - page_started,
+                )
+
             release_memory()
+
+        log.info(
+            "[RECOVERY COMPLETE] Pagine riuscite: %d/%d | fallite: %d | durata: %s",
+            successful_pages,
+            self.total_pages,
+            failed_pages,
+            _format_duration(
+                time.monotonic() - recovery_started
+            ),
+        )
 
     def _save_checkpoint(self) -> None:
         """Persist the final state for post-processing, not for resuming extraction."""
@@ -1237,10 +1691,16 @@ class ManualExtractor:
     def _finalize(self) -> None:
         """Flush the final section and write index, checkpoint and report."""
         self._flush_section()
+
         self.state.current_section = None
         self.state.finished = True
 
-        counts = detect_continuations(self.state.index["tables"])
+        log.info("[FINALIZATION] Analisi delle continuazioni delle tabelle")
+
+        counts = detect_continuations(
+            self.state.index["tables"]
+        )
+
         log.info(
             "Table continuations detected: %d high, %d medium",
             counts["high"],
@@ -1248,40 +1708,60 @@ class ManualExtractor:
         )
 
         merged = 0
+
         if self.merge_tables_enabled:
+            log.info("[FINALIZATION] Fusione delle tabelle continuate")
+
             merged = merge_tables(
                 self.layout,
                 self.state.index,
                 self.merge_min_confidence,
             )
 
+        log.info("[FINALIZATION] Scrittura checkpoint, indice e report")
+
         self._save_checkpoint()
+
         atomic_write_json(
             self.layout.index_file,
             self.state.index,
         )
+
         self._write_report(aborted=False)
 
         counters = self.state.counters
         issues = self.state.index["issues"]
+
         errors = [
-            issue for issue in issues
+            issue
+            for issue in issues
             if issue["severity"] == "error"
         ]
 
+        elapsed = time.monotonic() - self._started_at
+
         log.info("")
-        log.info("=" * 40)
+        log.info("=" * 56)
         log.info("FINAL SUMMARY")
+        log.info("=" * 56)
+        log.info("Pages    : %d", self.total_pages)
+        log.info("Duration : %s", _format_duration(elapsed))
         log.info("Sections : %d", counters["section"])
         log.info("Tables   : %d", counters["table"])
+
         log.info(
             "Figures  : %d (skipped as too small: %d)",
             counters["picture"],
             counters["picture_skipped"],
         )
+
         log.info("Footnotes: %d", counters["footnote"])
         log.info("Tables merged: %d", merged)
-        log.info("Issues   : %d (%d errors)", len(issues), len(errors))
+        log.info(
+            "Issues   : %d (%d errors)",
+            len(issues),
+            len(errors),
+        )
 
         for issue in errors:
             log.info(
@@ -1293,7 +1773,7 @@ class ManualExtractor:
 
         log.info("Index    : %s", self.layout.index_file)
         log.info("Report   : %s", self.layout.report_file)
-        log.info("=" * 40)
+        log.info("=" * 56)
 
     def _write_report(self, aborted: bool) -> None:
         """Write the report on a best-effort basis."""
@@ -1309,6 +1789,7 @@ class ManualExtractor:
                     aborted=aborted,
                 ),
             )
+
         except Exception:  # noqa: BLE001
             log.exception(
                 "Could not write report %s",
@@ -1331,9 +1812,11 @@ class ManualExtractor:
                 "convert",
                 problem or "conversion failed",
             )
+
             self._append_block(
                 f"[PAGE {page} COULD NOT BE CONVERTED]"
             )
+
             return
 
         if problem:
@@ -1344,7 +1827,11 @@ class ManualExtractor:
                 problem,
             )
 
-        self._consume(result, default_page=page)
+        self._consume(
+            result,
+            default_page=page,
+        )
+
         del result
 
     # -- item handling ---------------------------------------------------- #
@@ -1354,27 +1841,133 @@ class ManualExtractor:
         result: Any,
         default_page: int,
     ) -> None:
-        """Walk a Docling document and dispatch each item to its handler."""
+        """Walk a Docling document and log page and item-level progress."""
         doc = result.document
+
         last_page = default_page
+
+        page_items = 0
+        page_tables = 0
+        page_pictures = 0
+        page_texts = 0
+        page_sections = 0
+
+        processed_pages: set[int] = set()
+
+        def finish_page(page_no: int) -> None:
+            log.info(
+                "[PAGE %d/%d COMPLETE] Elementi: %d | sezioni: %d | "
+                "testi: %d | tabelle: %d | figure: %d",
+                page_no,
+                self.total_pages,
+                page_items,
+                page_sections,
+                page_texts,
+                page_tables,
+                page_pictures,
+            )
 
         for item, _depth in doc.iterate_items():
             prov = getattr(item, "prov", None)
-            page_no = prov[0].page_no if prov else last_page
+
+            page_no = (
+                prov[0].page_no
+                if prov
+                else last_page
+            )
+
+            if page_no != last_page and page_items:
+                finish_page(last_page)
+
+                page_items = 0
+                page_tables = 0
+                page_pictures = 0
+                page_texts = 0
+                page_sections = 0
+
             last_page = page_no
 
-            try:
-                self._handle_item(doc, item, page_no)
-            except Exception as exc:  # noqa: BLE001
-                self._report_issue(
+            if page_no not in processed_pages:
+                processed_pages.add(page_no)
+
+                log.info(
+                    "[PAGE %d/%d START] Analisi degli elementi...",
                     page_no,
-                    "error",
-                    "item",
-                    f"{type(item).__name__} "
-                    f"({getattr(item, 'label', '?')}): "
-                    f"{type(exc).__name__}: {exc}",
-                    exc=exc,
+                    self.total_pages,
                 )
+
+            if isinstance(item, SectionHeaderItem):
+                item_type = "SECTION"
+                page_sections += 1
+
+            elif isinstance(item, TableItem):
+                item_type = "TABLE"
+                page_tables += 1
+
+            elif isinstance(item, PictureItem):
+                item_type = "FIGURE"
+                page_pictures += 1
+
+            elif isinstance(item, TextItem):
+                item_type = "TEXT"
+                page_texts += 1
+
+            else:
+                item_type = type(item).__name__.upper()
+
+            page_items += 1
+
+            description = ""
+
+            if isinstance(item, (SectionHeaderItem, TextItem)):
+                description = " ".join(
+                    str(getattr(item, "text", "")).split()
+                )[:100]
+
+            elif isinstance(item, TableItem):
+                description = "tabella rilevata"
+
+            elif isinstance(item, PictureItem):
+                description = "figura rilevata"
+
+            with page_context(
+                f"p{page_no}/{self.total_pages}"
+            ):
+                log.info(
+                    "[%s] %s%s",
+                    item_type,
+                    description,
+                    "..." if len(description) >= 100 else "",
+                )
+
+                try:
+                    self._handle_item(
+                        doc,
+                        item,
+                        page_no,
+                    )
+
+                except Exception as exc:  # noqa: BLE001
+                    self._report_issue(
+                        page_no,
+                        "error",
+                        "item",
+                        (
+                            f"{type(item).__name__} "
+                            f"({getattr(item, 'label', '?')}): "
+                            f"{type(exc).__name__}: {exc}"
+                        ),
+                        exc=exc,
+                    )
+
+        if page_items:
+            finish_page(last_page)
+
+        log.info(
+            "[EXTRACTION PROGRESS] Pagine con elementi elaborati: %d/%d",
+            len(processed_pages),
+            self.total_pages,
+        )
 
     def _handle_item(
         self,
@@ -1383,13 +1976,30 @@ class ManualExtractor:
         page_no: int,
     ) -> None:
         if isinstance(item, SectionHeaderItem):
-            self._handle_section_header(item, page_no)
+            self._handle_section_header(
+                item,
+                page_no,
+            )
+
         elif isinstance(item, TextItem):
-            self._handle_text(item, page_no)
+            self._handle_text(
+                item,
+                page_no,
+            )
+
         elif isinstance(item, TableItem):
-            self._handle_table(doc, item, page_no)
+            self._handle_table(
+                doc,
+                item,
+                page_no,
+            )
+
         elif isinstance(item, PictureItem):
-            self._handle_picture(doc, item, page_no)
+            self._handle_picture(
+                doc,
+                item,
+                page_no,
+            )
 
     def _next_counter(self, kind: str) -> int:
         self.state.counters[kind] += 1
@@ -1397,10 +2007,12 @@ class ManualExtractor:
 
     def _append_block(self, block: str) -> None:
         assert self.state.current_section is not None
+
         self.state.current_section["buffer"].append(block)
 
     def _flush_section(self) -> None:
         sec = self.state.current_section
+
         if (
             sec is None
             or (
@@ -1410,7 +2022,10 @@ class ManualExtractor:
         ):
             return
 
-        md_path = self.layout.sections / f"{sec['id']}.md"
+        md_path = (
+            self.layout.sections / f"{sec['id']}.md"
+        )
+
         md_path.write_text(
             f"# {sec['title']}\n\n"
             + "\n\n".join(sec["buffer"])
@@ -1429,20 +2044,31 @@ class ManualExtractor:
             }
         )
 
+        log.info(
+            "[SECTION SAVED] %s | pagina iniziale: %d | blocchi: %d",
+            sec["title"],
+            sec["page_start"],
+            len(sec["buffer"]),
+        )
+
     def _handle_section_header(
         self,
         item: SectionHeaderItem,
         page_no: int,
     ) -> None:
         self._flush_section()
+
         n = self._next_counter("section")
         heading = item.text.strip()
+
         match = HEADING_NUMBER_RE.match(heading)
+
         toc_number = (
             (match.group(1) or match.group(2))
             if match
             else None
         )
+
         sec_id = (
             f"sec_{n:05d}_"
             f"{slugify(toc_number or heading, 'untitled')}"
@@ -1456,6 +2082,13 @@ class ManualExtractor:
             page_no,
         )
 
+        log.info(
+            "[SECTION #%d] Pagina %d | %s",
+            n,
+            page_no,
+            heading,
+        )
+
     def _handle_text(
         self,
         item: TextItem,
@@ -1465,15 +2098,23 @@ class ManualExtractor:
             return
 
         text = item.text.strip()
+
         if not text:
             return
 
         if item.label == DocItemLabel.FOOTNOTE:
             n = self._next_counter("footnote")
+
             match = FOOTNOTE_NUMBER_RE.match(text)
-            fn_num = match.group(1) if match else str(n)
+
+            fn_num = (
+                match.group(1)
+                if match
+                else str(n)
+            )
 
             assert self.state.current_section is not None
+
             self.state.index["footnotes"].append(
                 {
                     "id": f"fn_{n:05d}_p{page_no}",
@@ -1483,19 +2124,35 @@ class ManualExtractor:
                     "text": text,
                 }
             )
+
             self._append_block(
                 f"> **[Footnote {fn_num}]**: {text}"
             )
 
+            log.info(
+                "[FOOTNOTE #%d] Pagina %d | numero=%s",
+                n,
+                page_no,
+                fn_num,
+            )
+
         elif isinstance(item, ListItem):
-            self._append_block(f"- {text}")
+            self._append_block(
+                f"- {text}"
+            )
+
         else:
             self._append_block(text)
 
     @staticmethod
     def _bbox(item: Any) -> list[float]:
         prov = getattr(item, "prov", None)
-        return list(prov[0].bbox.as_tuple()) if prov else []
+
+        return (
+            list(prov[0].bbox.as_tuple())
+            if prov
+            else []
+        )
 
     def _handle_table(
         self,
@@ -1504,30 +2161,67 @@ class ManualExtractor:
         page_no: int,
     ) -> None:
         n = self._next_counter("table")
+
         caption = item.caption_text(doc).strip()
+
         match = TABLE_NUMBER_RE.search(caption)
+
         label = (
             match.group(1).replace("-", ".")
             if match
             else f"p{page_no}"
         )
-        tbl_id = f"tbl_{n:05d}_{slugify(label, 'x')}"
-        md_file = self.layout.tables / f"{tbl_id}.md"
-        json_file = self.layout.tables / f"{tbl_id}.json"
+
+        tbl_id = (
+            f"tbl_{n:05d}_{slugify(label, 'x')}"
+        )
+
+        md_file = (
+            self.layout.tables / f"{tbl_id}.md"
+        )
+
+        json_file = (
+            self.layout.tables / f"{tbl_id}.json"
+        )
+
+        data = item.data
+
+        log.info(
+            "[TABLE #%d] Pagina %d | ID=%s | righe=%s | colonne=%s | caption=%s",
+            n,
+            page_no,
+            tbl_id,
+            getattr(data, "num_rows", "?"),
+            getattr(data, "num_cols", "?"),
+            caption or "<senza didascalia>",
+        )
 
         body = item.export_to_markdown(doc)
+
         md_file.write_text(
-            (f"**{caption}**\n\n" if caption else "")
+            (
+                f"**{caption}**\n\n"
+                if caption
+                else ""
+            )
             + body
             + "\n",
             encoding="utf-8",
         )
+
         atomic_write_json(
             json_file,
             item.data.model_dump(),
         )
 
+        log.info(
+            "[TABLE SAVED] Markdown: %s | JSON: %s",
+            md_file.name,
+            json_file.name,
+        )
+
         assert self.state.current_section is not None
+
         self.state.index["tables"].append(
             {
                 "id": tbl_id,
@@ -1540,7 +2234,11 @@ class ManualExtractor:
                 "caption_continued": bool(
                     CONTINUED_MARKER_RE.search(caption)
                 ),
-                **table_geometry(doc, item, page_no),
+                **table_geometry(
+                    doc,
+                    item,
+                    page_no,
+                ),
                 "continues_from": None,
                 "md_path": self.layout.rel(md_file),
                 "json_path": self.layout.rel(json_file),
@@ -1558,28 +2256,64 @@ class ManualExtractor:
         page_no: int,
     ) -> None:
         pil_img = item.get_image(doc)
+
         if (
             pil_img is not None
             and min(pil_img.size) < self.min_image_px
         ):
             self.state.counters["picture_skipped"] += 1
+
+            log.info(
+                "[FIGURE SKIPPED] Pagina %d | dimensioni=%sx%s px | minimo=%d px",
+                page_no,
+                pil_img.width,
+                pil_img.height,
+                self.min_image_px,
+            )
+
             return
 
         n = self._next_counter("picture")
+
         caption = item.caption_text(doc).strip()
+
         match = FIGURE_NUMBER_RE.search(caption)
+
         label = (
             match.group(1).replace("-", ".")
             if match
             else f"p{page_no}"
         )
-        fig_id = f"fig_{n:05d}_{slugify(label, 'x')}"
-        img_file = self.layout.images / f"{fig_id}.png"
+
+        fig_id = (
+            f"fig_{n:05d}_{slugify(label, 'x')}"
+        )
+
+        img_file = (
+            self.layout.images / f"{fig_id}.png"
+        )
 
         if pil_img is not None:
-            pil_img.save(img_file, format="PNG")
+            pil_img.save(
+                img_file,
+                format="PNG",
+            )
+
+        log.info(
+            "[FIGURE #%d SAVED] Pagina %d | ID=%s | file=%s | dimensioni=%s",
+            n,
+            page_no,
+            fig_id,
+            img_file.name,
+            (
+                f"{pil_img.width}x{pil_img.height}px"
+                if pil_img
+                else "immagine non disponibile"
+            ),
+        )
 
         assert self.state.current_section is not None
+
         self.state.index["pictures"].append(
             {
                 "id": fig_id,
@@ -1603,12 +2337,16 @@ class ManualExtractor:
 
     # -- diagnostics ------------------------------------------------------ #
 
-    def _export_page(self, page_no: int) -> Optional[str]:
+    def _export_page(
+        self,
+        page_no: int,
+    ) -> Optional[str]:
         """Save a standalone copy of a problematic PDF page."""
         dest = (
             self.layout.failed_pages
             / f"page_{page_no:05d}.pdf"
         )
+
         try:
             if not dest.exists():
                 with (
@@ -1620,14 +2358,18 @@ class ManualExtractor:
                         from_page=page_no - 1,
                         to_page=page_no - 1,
                     )
+
                     out.save(str(dest))
+
             return self.layout.rel(dest)
+
         except Exception as exc:  # noqa: BLE001
             log.debug(
                 "Could not export page %d: %s",
                 page_no,
                 exc,
             )
+
             return None
 
     def _report_issue(
@@ -1638,12 +2380,23 @@ class ManualExtractor:
         message: str,
         exc: Optional[BaseException] = None,
     ) -> None:
-        excerpt = describe_page(self.pdf_path, page_no)
+        excerpt = describe_page(
+            self.pdf_path,
+            page_no,
+        )
+
         saved = self._export_page(page_no)
 
         log.log(
-            logging.ERROR if severity == "error" else logging.WARNING,
-            "PDF PAGE %d | stage=%s | %s | page text: %r | page copy: %s",
+            (
+                logging.ERROR
+                if severity == "error"
+                else logging.WARNING
+            ),
+            (
+                "PDF PAGE %d | stage=%s | %s | "
+                "page text: %r | page copy: %s"
+            ),
             page_no,
             stage,
             message,
@@ -1676,28 +2429,45 @@ def _enrich_continuation_signals(
     """Backfill structural continuation signals from table JSON files."""
     for meta in tables:
         rel = meta.get("json_path")
+
         if not rel:
             continue
 
         path = layout.root / rel
+
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(
+                path.read_text(encoding="utf-8")
+            )
+
             cells = data.get("table_cells", [])
+
             header = [
-                cell for cell in cells
+                cell
+                for cell in cells
                 if cell.get("column_header")
             ]
 
             if header and not meta.get("column_x_signature"):
                 by_col: dict[int, list[tuple[float, float]]] = {}
+
                 for cell in header:
                     bbox = cell.get("bbox") or {}
+
                     if "l" in bbox and "r" in bbox:
                         by_col.setdefault(
-                            int(cell.get("start_col_offset_idx", 0)),
+                            int(
+                                cell.get(
+                                    "start_col_offset_idx",
+                                    0,
+                                )
+                            ),
                             [],
                         ).append(
-                            (float(bbox["l"]), float(bbox["r"]))
+                            (
+                                float(bbox["l"]),
+                                float(bbox["r"]),
+                            )
                         )
 
                 if by_col:
@@ -1710,20 +2480,29 @@ def _enrich_continuation_signals(
                     ]
 
             rows: dict[int, dict[int, str]] = {}
+
             for cell in cells:
                 if not cell.get("column_header"):
-                    r = int(cell.get("start_row_offset_idx", 0))
-                    c = int(cell.get("start_col_offset_idx", 0))
+                    r = int(
+                        cell.get("start_row_offset_idx", 0)
+                    )
+
+                    c = int(
+                        cell.get("start_col_offset_idx", 0)
+                    )
+
                     rows.setdefault(r, {})[c] = str(
                         cell.get("text", "")
                     ).strip()
 
             if rows:
                 ordered_rows = sorted(rows)
+
                 meta.setdefault(
                     "first_data_key",
                     rows[ordered_rows[0]].get(0) or None,
                 )
+
                 meta.setdefault(
                     "last_data_key",
                     rows[ordered_rows[-1]].get(0) or None,
@@ -1753,21 +2532,27 @@ def run_postprocess(
             ckpt,
             index_file,
         )
+
         return 1
 
     try:
         state = ExtractionState(
-            **json.loads(ckpt.read_text(encoding="utf-8"))
+            **json.loads(
+                ckpt.read_text(encoding="utf-8")
+            )
         )
+
         state.index = json.loads(
             index_file.read_text(encoding="utf-8")
         )
+
     except (OSError, ValueError, TypeError) as exc:
         log.error(
             "Cannot read the extraction output in %s: %s",
             layout.root,
             exc,
         )
+
         return 1
 
     if state.version != CHECKPOINT_VERSION:
@@ -1777,6 +2562,7 @@ def run_postprocess(
             state.version,
             CHECKPOINT_VERSION,
         )
+
         return 1
 
     if not state.finished:
@@ -1784,6 +2570,7 @@ def run_postprocess(
             "Extraction is not finished. Run the extraction again "
             "before post-processing."
         )
+
         return 1
 
     log.info("=== TABLE POST-PROCESSING ===")
@@ -1794,7 +2581,11 @@ def run_postprocess(
             layout,
             state.index["tables"],
         )
-        counts = detect_continuations(state.index["tables"])
+
+        counts = detect_continuations(
+            state.index["tables"]
+        )
+
         log.info(
             "Re-detected continuations: %d high, %d medium",
             counts["high"],
@@ -1807,10 +2598,18 @@ def run_postprocess(
         min_confidence,
     )
 
-    atomic_write_json(index_file, state.index)
-    atomic_write_json(ckpt, asdict(state))
+    atomic_write_json(
+        index_file,
+        state.index,
+    )
+
+    atomic_write_json(
+        ckpt,
+        asdict(state),
+    )
 
     settings = state.settings or {}
+
     atomic_write_text(
         layout.report_file,
         build_report(
@@ -1818,7 +2617,10 @@ def run_postprocess(
             layout=layout,
             pdf_path=Path(state.fingerprint["pdf_name"]),
             min_image_px=int(
-                settings.get("min_image_px", DEFAULT_MIN_IMAGE_PX)
+                settings.get(
+                    "min_image_px",
+                    DEFAULT_MIN_IMAGE_PX,
+                )
             ),
             elapsed_s=0.0,
             aborted=False,
@@ -1834,6 +2636,7 @@ def run_postprocess(
         merged,
         layout.report_file,
     )
+
     return 0
 
 
@@ -1842,7 +2645,9 @@ def run_postprocess(
 # --------------------------------------------------------------------------- #
 
 
-def parse_args(argv: list[str]) -> argparse.Namespace:
+def parse_args(
+    argv: list[str],
+) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Extract sections, tables and figures from a PDF with Docling."
@@ -1855,6 +2660,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         nargs="?",
         help="input PDF file (not needed with --postprocess-only)",
     )
+
     parser.add_argument(
         "--output",
         "--out-dir",
@@ -1867,6 +2673,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "(alias: --out-dir; default: ./output_manuale)"
         ),
     )
+
     parser.add_argument(
         "--min-image-px",
         type=int,
@@ -1877,6 +2684,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             f"(default: {DEFAULT_MIN_IMAGE_PX})"
         ),
     )
+
     parser.add_argument(
         "--no-locate-warnings",
         action="store_true",
@@ -1885,11 +2693,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "warnings will be attributed to the whole document"
         ),
     )
+
     parser.add_argument(
         "--merge-tables",
         action="store_true",
         help="after extraction, merge tables that continue across pages",
     )
+
     parser.add_argument(
         "--merge-min-confidence",
         choices=sorted(
@@ -1903,6 +2713,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "(default: high)"
         ),
     )
+
     parser.add_argument(
         "--postprocess-only",
         action="store_true",
@@ -1911,6 +2722,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "output in --output and refresh index and report"
         ),
     )
+
     parser.add_argument(
         "--redetect",
         action="store_true",
@@ -1923,7 +2735,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     args = parser.parse_args(argv)
 
     if args.redetect and not args.postprocess_only:
-        parser.error("--redetect requires --postprocess-only")
+        parser.error(
+            "--redetect requires --postprocess-only"
+        )
 
     if not args.postprocess_only and args.pdf is None:
         parser.error(
@@ -1936,10 +2750,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return args
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(
+    argv: Optional[list[str]] = None,
+) -> int:
     args = parse_args(
-        sys.argv[1:] if argv is None else argv
+        sys.argv[1:]
+        if argv is None
+        else argv
     )
+
     configure_logging()
 
     if args.output.exists() and not args.output.is_dir():
@@ -1947,6 +2766,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             "--output exists but is not a directory: %s",
             args.output,
         )
+
         return 1
 
     if args.postprocess_only:
@@ -1954,18 +2774,27 @@ def main(argv: Optional[list[str]] = None) -> int:
             log.warning(
                 "--postprocess-only: the PDF argument is ignored"
             )
+
         try:
             return run_postprocess(
                 OutputLayout(args.output),
                 args.merge_min_confidence,
                 args.redetect,
             )
+
         except Exception:  # noqa: BLE001
-            log.exception("Fatal error during post-processing")
+            log.exception(
+                "Fatal error during post-processing"
+            )
+
             return 1
 
     if not args.pdf.is_file():
-        log.error("Input PDF not found: %s", args.pdf)
+        log.error(
+            "Input PDF not found: %s",
+            args.pdf,
+        )
+
         return 1
 
     extractor = ManualExtractor(
@@ -1979,8 +2808,11 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     try:
         return extractor.run()
+
     except KeyboardInterrupt:
+        log.warning("Interruzione richiesta dall'utente.")
         return 130
+
     except Exception:  # noqa: BLE001
         log.exception("Fatal error")
         return 1

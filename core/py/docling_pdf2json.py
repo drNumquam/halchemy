@@ -1,3 +1,55 @@
+# =============================================================================
+# CONTRACT
+# =============================================================================
+# Purpose:
+#   Export a PDF (or a range of its pages) to a complete JSON document using
+#   Docling (layout analysis, tables, optional OCR, picture extraction).
+#   The console output is also mirrored to a report file (report.txt).
+#
+# Syntax:
+#   python pdf_to_json_docling.py --pdf <PDF_FILE> --output <OUTPUT_DIR>
+#                                 [--range MIN MAX] [--no_ocr]
+#
+# Arguments:
+#   --pdf     (required) Path of the input PDF file. Must exist, be a file and
+#             have a .pdf extension. "~" is expanded, the path is resolved.
+#   --output  (required) Destination folder. Created if missing; it must not
+#             be an existing non-directory path.
+#   --range   (optional) Two integers MIN MAX: first and last page to process
+#             (1-based, inclusive). Constraints: 1 <= MIN <= MAX <= total pages.
+#             If omitted, the whole PDF is processed.
+#   --no_ocr  (optional) Disable OCR. Use only if the PDF is fully native
+#             (not scanned). OCR is enabled by default.
+#
+# Examples:
+#   python pdf_to_json_docling.py --pdf doc.pdf --output out
+#   python pdf_to_json_docling.py --pdf doc.pdf --output out --range 2 6
+#   python pdf_to_json_docling.py --pdf doc.pdf --output out --no_ocr
+#
+# Output (inside --output):
+#   <pdf_stem>.json              full run
+#   <pdf_stem>_p<MIN>-<MAX>.json when --range is used
+#   report.txt                   copy of stdout/stderr and Docling INFO logs
+#                                (overwritten at every run)
+#   Pictures are exported as referenced image files (ImageRefMode.REFERENCED),
+#   handled by Docling next to the JSON file, and rendered at scale 2.0.
+#
+# Exit codes:
+#   0  success
+#   1  validation error (missing/invalid file, invalid --range, invalid --output)
+#   2  unexpected error during the Docling conversion
+#
+# Dependencies:
+#   - Python >= 3.10 (uses the "X | None" type-hint syntax)
+#   - docling        (DocumentConverter, PdfPipelineOptions, InputFormat)
+#   - docling-core   (docling_core.types.doc.ImageRefMode; installed with docling)
+#   - pypdfium2      (reads the total page count of the PDF)
+#   - Standard library: argparse, logging, json, io, sys, pathlib, contextlib
+#   Installation:
+#       pip install docling pypdfium2
+#   Note: on the first run Docling may download its AI models (network needed).
+# =============================================================================
+
 import argparse
 import logging
 import json
@@ -45,7 +97,7 @@ class Tee(io.TextIOBase):
 def tee_output_to_file(report_path: Path):
     report_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Manteniamo i riferimenti reali alla console
+    # Keep the real references to the console
     orig_stdout = sys.stdout
     orig_stderr = sys.stderr
 
@@ -53,7 +105,7 @@ def tee_output_to_file(report_path: Path):
         tee_out = Tee(orig_stdout, report_file)
         tee_err = Tee(orig_stderr, report_file)
 
-        # Handler solo per i log di Docling/Python verso il file (lo schermo già riceve stderr tramite tee_err)
+        # Handler only for Docling/Python logs going to the file (the screen already receives stderr via tee_err)
         log_handler = logging.StreamHandler(report_file)
         log_handler.setLevel(logging.INFO)
         log_handler.setFormatter(
@@ -81,16 +133,16 @@ def tee_output_to_file(report_path: Path):
 
 
 def get_pdf_page_count(pdf_path: Path) -> int:
-    """Restituisce il numero totale di pagine del PDF tramite pypdfium2."""
+    """Return the total number of pages of the PDF using pypdfium2."""
     pdf_doc = None
     try:
         pdf_doc = pdfium.PdfDocument(str(pdf_path))
         page_count = len(pdf_doc)
         if page_count <= 0:
-            raise ValueError("Il PDF non contiene pagine valide.")
+            raise ValueError("The PDF does not contain any valid pages.")
         return page_count
     except Exception as exc:
-        raise ValueError(f"Impossibile leggere il PDF '{pdf_path}': {exc}") from exc
+        raise ValueError(f"Unable to read the PDF '{pdf_path}': {exc}") from exc
     finally:
         if pdf_doc is not None:
             pdf_doc.close()
@@ -101,47 +153,47 @@ def validate_inputs(
     output_raw: str,
     range_values: list[int] | None,
 ) -> tuple[Path, Path, tuple[int, int] | None, int]:
-    """Valida --pdf, --output e --range (1-based, inclusivo)."""
+    """Validate --pdf, --output and --range (1-based, inclusive)."""
     pdf_path = Path(pdf_raw).expanduser().resolve()
 
     if not pdf_path.exists():
-        raise FileNotFoundError(f"Il file PDF non esiste: {pdf_path}")
+        raise FileNotFoundError(f"The PDF file does not exist: {pdf_path}")
     if not pdf_path.is_file():
-        raise ValueError(f"Il percorso --pdf non punta a un file: {pdf_path}")
+        raise ValueError(f"The --pdf path does not point to a file: {pdf_path}")
     if pdf_path.suffix.lower() != ".pdf":
-        raise ValueError(f"Il file specificato non ha estensione .pdf: {pdf_path}")
+        raise ValueError(f"The specified file does not have a .pdf extension: {pdf_path}")
 
     total_pages = get_pdf_page_count(pdf_path)
 
     validated_range: tuple[int, int] | None = None
     if range_values is not None:
         if len(range_values) != 2:
-            raise ValueError("--range richiede esattamente due interi: min max (es. --range 1 5).")
+            raise ValueError("--range requires exactly two integers: min max (e.g. --range 1 5).")
 
         start_page, end_page = range_values
 
         if start_page < 1:
             raise ValueError(
-                f"La pagina iniziale (min={start_page}) deve essere maggiore o uguale a 1."
+                f"The start page (min={start_page}) must be greater than or equal to 1."
             )
         if end_page < 1:
             raise ValueError(
-                f"La pagina finale (max={end_page}) deve essere maggiore o uguale a 1."
+                f"The end page (max={end_page}) must be greater than or equal to 1."
             )
         if start_page > end_page:
             raise ValueError(
-                f"Intervallo non valido: min ({start_page}) non può essere maggiore di max ({end_page})."
+                f"Invalid range: min ({start_page}) cannot be greater than max ({end_page})."
             )
         if end_page > total_pages:
             raise ValueError(
-                f"La pagina finale (max={end_page}) supera il numero totale di pagine del PDF ({total_pages})."
+                f"The end page (max={end_page}) exceeds the total number of pages in the PDF ({total_pages})."
             )
 
         validated_range = (start_page, end_page)
 
     output_dir = Path(output_raw).expanduser().resolve()
     if output_dir.exists() and not output_dir.is_dir():
-        raise ValueError(f"Il percorso --output esiste già ma non è una cartella: {output_dir}")
+        raise ValueError(f"The --output path already exists but is not a folder: {output_dir}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     return pdf_path, output_dir, validated_range, total_pages
@@ -153,11 +205,11 @@ def export_pdf_to_json(
     page_range: tuple[int, int] | None,
     no_ocr: bool = False
 ) -> Path:
-    """Converte il PDF (o il range indicato) con Docling e salva il JSON omnicomprensivo."""
+    """Convert the PDF (or the given range) with Docling and save the all-inclusive JSON."""
 #    converter = DocumentConverter()
     pipeline_options = PdfPipelineOptions()
     pipeline_options.generate_picture_images = True
-    pipeline_options.images_scale = 2.0  # opzionale (default ~1.0)
+    pipeline_options.images_scale = 2.0  # optional (default ~1.0)
     pipeline_options.do_ocr = not no_ocr
 
     converter = DocumentConverter(
@@ -182,27 +234,22 @@ def export_pdf_to_json(
         json_path,
         image_mode=ImageRefMode.REFERENCED,
     )
-    #doc_dict = doc.export_to_dict(image_mode=ImageRefMode.REFERENCED)
-    #json_path.write_text(
-    #    json.dumps(doc_dict, indent=2, ensure_ascii=False),
-    #    encoding="utf-8",
-    #)
     return json_path
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Esporta un PDF (o un intervallo di pagine) in JSON completo tramite Docling."
+        description="Export a PDF (or a range of pages) to a complete JSON using Docling."
     )
     parser.add_argument(
         "--pdf",
         required=True,
-        help="Percorso completo del file PDF di input.",
+        help="Full path of the input PDF file.",
     )
     parser.add_argument(
         "--output",
         required=True,
-        help="Cartella di destinazione in cui salvare il file JSON risultante.",
+        help="Destination folder where the resulting JSON file will be saved.",
     )
     parser.add_argument(
         "--range",
@@ -210,13 +257,13 @@ def parse_args() -> argparse.Namespace:
         type=int,
         metavar=("MIN", "MAX"),
         default=None,
-        help="Pagina iniziale e finale (1-based, inclusive), es. --range 2 6. Se omesso, elabora tutto il PDF.",
+        help="Start and end page (1-based, inclusive), e.g. --range 2 6. If omitted, the whole PDF is processed.",
     )
     parser.add_argument(
         "--no_ocr",
         action="store_true",
         default=False,
-        help="Disabilita l'OCR se il PDF in input è completamente nativo).",
+        help="Disable OCR if the input PDF is entirely native (not scanned).",
     )   
     return parser.parse_args()
 
@@ -250,13 +297,13 @@ def main() -> int:
                 no_ocr=args.no_ocr
             )
     except (FileNotFoundError, ValueError) as exc:
-        print(f"Errore di validazione: {exc}", file=sys.stderr)
+        print(f"Validation error: {exc}", file=sys.stderr)
         return 1
     except Exception as exc:
-        print(f"Errore durante la conversione con Docling: {exc}", file=sys.stderr)
+        print(f"Error during conversion with Docling: {exc}", file=sys.stderr)
         return 2
 
-    scope = f"pagine {page_range[0]}-{page_range[1]} su {total_pages}" if page_range else f"tutte le {total_pages} pagine"
+    scope = f"pages {page_range[0]}-{page_range[1]} of {total_pages}" if page_range else f"all {total_pages} pages"
     print()
     print(f"JSON exported SUCCESSFULLY ({scope}): {out_file}")
     print()

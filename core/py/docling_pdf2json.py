@@ -9,6 +9,7 @@ import pypdfium2 as pdfium
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling_core.types.doc import ImageRefMode
 
 
 class Tee(io.TextIOBase):
@@ -175,12 +176,17 @@ def export_pdf_to_json(
 
     doc = conv_result.document
     json_path = output_dir / output_filename
+    json_path.parent.mkdir(parents=True, exist_ok=True)
 
-    doc_dict = doc.export_to_dict()
-    json_path.write_text(
-        json.dumps(doc_dict, indent=2, ensure_ascii=False),
-        encoding="utf-8",
+    doc.save_as_json(
+        json_path,
+        image_mode=ImageRefMode.REFERENCED,
     )
+    #doc_dict = doc.export_to_dict(image_mode=ImageRefMode.REFERENCED)
+    #json_path.write_text(
+    #    json.dumps(doc_dict, indent=2, ensure_ascii=False),
+    #    encoding="utf-8",
+    #)
     return json_path
 
 
@@ -252,7 +258,7 @@ def main() -> int:
 
     scope = f"pagine {page_range[0]}-{page_range[1]} su {total_pages}" if page_range else f"tutte le {total_pages} pagine"
     print()
-    print(f"JSON exported SUCCESFULLY ({scope}): {out_file}")
+    print(f"JSON exported SUCCESSFULLY ({scope}): {out_file}")
     print()
     return 0
 

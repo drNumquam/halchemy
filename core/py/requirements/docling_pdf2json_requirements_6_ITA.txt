@@ -1,0 +1,222 @@
+# REQUISITI SCRIPT PDF → DOCLING
+
+## 1. Scopo
+Realizzare uno script Python a riga di comando che:
+- accetti un PDF in input;
+- utilizzi Docling come motore principale di estrazione;
+- generi un output strutturato e leggero;
+- produca reportistica dettagliata;
+- preservi il più possibile gli asset nativi estratti da Docling;
+- minimizzi l’uso di elaborazioni Python esterne.
+
+## 2. Interfaccia a Riga di Comando
+Parametri obbligatori:
+--pdf <fullpath_pdf>
+--output <output_folder>
+
+Parametri opzionali:
+--range <min_page> <max_page>
+
+L'opzione --range consente di limitare la conversione a uno specifico intervallo di pagine del PDF.
+
+Esempi:
+--range 1 100
+--range 250 500
+--range 1200 1200
+
+Requisiti:
+- min_page e max_page sono inclusivi;
+- la numerazione delle pagine segue la numerazione fisica del PDF;
+- min_page deve essere maggiore o uguale a 1;
+- max_page deve essere maggiore o uguale a min_page;
+- lo script deve validare l'intervallo richiesto;
+- in caso di intervallo non valido deve terminare con errore esplicito riportato sia a console sia in report.txt;
+- se l'opzione non è specificata deve essere elaborato l'intero documento;
+- lo script deve utilizzare le funzionalità native di Docling per limitare l'intervallo di pagine quando disponibili;
+- non devono essere implementati meccanismi custom di slicing delle pagine se Docling fornisce già una funzionalità equivalente.
+
+Non sono previsti parametri opzionali per resume, checkpoint o batching.
+
+## 3. Struttura Output
+<output>/
+├── <json esportato da Docling>
+├── report.txt
+├── sections/
+├── tables/
+└── figures/
+
+## 4. JSON Docling
+Il file JSON principale deve essere generato e mantenuto da Docling.
+Lo script non deve imporre, modificare o ridefinire la struttura interna del JSON prodotto da Docling.
+Lo script deve limitarsi a:
+- richiedere a Docling la generazione del JSON;
+- salvare il JSON prodotto da Docling;
+- utilizzare il JSON come fonte autoritativa di metadati e relazioni.
+
+Lo script non deve:
+- trasformare il JSON in uno schema proprietario;
+- introdurre campi alternativi già disponibili in Docling;
+- duplicare informazioni già mantenute da Docling.
+
+## 5. Gestione delle Sezioni
+Per ogni sezione individuata da Docling deve essere salvato il corrispondente file Markdown esportato da Docling nella directory sections/.
+
+Requisiti:
+- utilizzare l'esportazione Markdown nativa di Docling, ove disponibile nella versione utilizzata;
+- preservare il più possibile il contenuto originale;
+- preservare heading, sottosezioni, paragrafi, elenchi, riferimenti e formattazione disponibile;
+- utilizzare identificativi derivati da Docling quando disponibili;
+- mantenere identificativi stabili tra esportazioni successive dello stesso documento.
+
+Il contenuto delle sezioni deve esistere esclusivamente nei file Markdown.
+
+Non devono essere creati JSON dedicati alle sezioni.
+
+I nomi dei file devono essere determinati da Docling quando disponibile.
+
+## 6. Gestione delle Tabelle
+Per ogni tabella individuata da Docling deve essere salvato il corrispondente file Markdown esportato da Docling nella directory tables/.
+
+Requisiti:
+- utilizzare esclusivamente funzionalità native di Docling, ove disponibili nella versione utilizzata;
+- preservare il più possibile struttura e informazione della tabella;
+- preservare righe, colonne, intestazioni, caption e note quando disponibili;
+- evitare conversioni custom della tabella.
+
+Il contenuto delle tabelle deve esistere esclusivamente nei file Markdown.
+
+Non devono essere creati file JSON dedicati alle tabelle.
+
+I nomi dei file devono essere determinati da Docling quando disponibile.
+
+## 7. Gestione delle Figure
+Per ogni figura individuata da Docling deve essere salvata la corrispondente immagine esportata da Docling nella directory figures/.
+
+Requisiti:
+- utilizzare prioritariamente l'esportazione nativa delle figure offerta da Docling, ove disponibile nella versione utilizzata;
+- preservare il più possibile la rappresentazione originale presente nel PDF;
+- salvare esclusivamente l'immagine risultante.
+
+Non devono essere creati file JSON o Markdown dedicati alle figure.
+
+I nomi dei file devono essere determinati da Docling quando disponibile.
+
+## 8. Principio di Non Duplicazione
+Il contenuto reale del documento deve risiedere esclusivamente negli asset esportati:
+- sections/*.md
+- tables/*.md
+- figures/*
+
+Il JSON generato da Docling deve fungere esclusivamente da modello documentale e indice.
+
+## 9. Logging e Reportistica
+Generare report.txt.
+
+Tutte le informazioni del report devono essere visualizzate anche a console.
+
+Il report deve contenere:
+- timestamp;
+- avvio elaborazione;
+- avanzamento elaborazione;
+- completamento elaborazione;
+- warning;
+- errori;
+- eccezioni;
+- statistiche finali;
+- intervallo di pagine richiesto tramite --range quando specificato.
+
+Per warning ed errori riportare il numero di pagina quando disponibile, altrimenti utilizzare:
+- Page: UNKNOWN
+- oppure Page: N/A
+
+## 10. Statistiche Finali
+Il report deve includere almeno:
+
+Pages processed : N
+Sections exported : N
+Tables exported : N
+Figures exported : N
+Warnings : N
+Errors : N
+Elapsed time : HH:MM:SS
+
+## 11. Gestione Errori
+In caso di errore:
+- non deve andare perso il lavoro già svolto;
+- qualora siano già stati esportati asset validi da Docling, essi devono essere conservati.
+- report.txt deve essere aggiornato;
+- la causa dell’interruzione deve essere documentata.
+
+## 12. Principi Architetturali
+Docling-First:
+- Docling è il parser principale del PDF;
+- Docling è la fonte autoritativa per identificazione ed estrazione degli elementi documentali;
+- Docling è responsabile della struttura del JSON;
+- Docling è responsabile del naming degli asset quando supportato.
+
+Utilizzare prioritariamente le funzionalità native di Docling per:
+- parsing PDF;
+- generazione del document model;
+- esportazione Markdown;
+- esportazione figure;
+- generazione metadati;
+- gestione degli intervalli di pagine richiesti tramite --range.
+
+Solo se una funzionalità non è disponibile in Docling è consentito utilizzare codice Python aggiuntivo o librerie esterne.
+
+Non utilizzare:
+- pdfplumber
+- pdfminer
+- Camelot
+- Tabula
+
+salvo impossibilità tecnica documentata.
+
+## 13. Responsabilità del Codice Python
+Il codice Python deve occuparsi principalmente di:
+- gestione CLI;
+- validazione dei parametri di input;
+- validazione dell'intervallo richiesto tramite --range;
+- orchestrazione di Docling;
+- logging;
+- reportistica;
+- gestione errori;
+- salvataggio degli asset esportati da Docling.
+
+## 14. Requisiti di Robustezza
+Supportare:
+- PDF molto grandi;
+- documenti di centinaia o migliaia di pagine;
+- esecuzioni di lunga durata;
+- esportazione incrementale degli asset prodotti da Docling.
+
+## 15. Versioni
+Versione Docling supportata: 2.151.0 o superiore.
+
+## 16. Avanzamento Elaborazione
+Quando disponibile, lo script deve utilizzare la
+progress_callback nativa di Docling per:
+
+- mostrare l'avanzamento a console;
+- registrare l'avanzamento in report.txt;
+- registrare i conteggi di pagine elaborate;
+- registrare le fasi principali della pipeline.
+
+Qualora Docling renda disponibile il numero di pagina
+all'interno degli eventi di avanzamento, tale informazione
+deve essere riportata nei log e utilizzata per contestualizzare
+warning ed errori.
+
+## 17. Qualità del codice Python
+1. Lo script deve essere formattato secondo standard industriali Python (PEP8).
+2. Lo script deve presentare un commento introduttivo di contratto che descriva:
+   - scopo;
+   - parametri CLI;
+   - output generati;
+   - dipendenze principali.
+3. Funzioni e classi devono avere responsabilità chiaramente definite.
+4. Il codice deve privilegiare leggibilità e manutenibilità rispetto all'ottimizzazione prematura.
+
+## 18. Punti Aperti
+1. API Docling da utilizzare;
+2. modalità di associazione warning/errori alle pagine quando Docling non fornisce tale informazione.

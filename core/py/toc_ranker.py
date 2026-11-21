@@ -1,3 +1,37 @@
+"""
+CONTRACT & SPECIFICATION
+======================
+Script: toc_ranker.py
+Purpose: Parse a hierarchical Table of Contents (TOC) from a TXT file, score each
+         section's relevance (0.00 - 1.00) via an LLM, sort results by descending
+         confidence, and export a flattened ranked text list plus a JSON metadata
+         file in the same target directory.
+
+CLI Syntax:
+  python toc_ranker.py --txt <path_to_toc.txt> [--prompt <path_to_prompt.txt>] [--output <path_to_output.txt>]
+
+Arguments:
+  --txt     (Required) Path to the input TXT file containing TOC lines.
+  --prompt  (Optional) Path to the system prompt text file (default: prompt.txt).
+  --output  (Optional) Path to the output ranked text file, or an existing
+            directory (default: toc_ranked.txt).
+
+Input Format (--txt):
+  Lines matching: <indent>[<ID>] <Title> (Page <N>) [<optional_tags>...]
+  Example:        [SEC_0004] 4. Peripherals (Page 15)
+
+Dependencies:
+  - Standard library: argparse, asyncio, json, os, re, sys, contextlib
+  - Third-party (for LLM_PROVIDER="qwen"): pyyaml (yaml), openai, httpx
+  - Third-party (for LLM_PROVIDER="copilot"): pyyaml (yaml), copilot (CopilotClient)
+
+Outputs (saved in the same directory as the resolved TXT output):
+  1. <output_file.txt>     : Flattened lines "[<id>] <title> — confidence: <0.00-1.00>"
+  2. peripheral_nodes.json : List of objects with fields:
+                             id, title, confidence, hierarchy, pages,
+                             stop_before_id, text_boundary
+"""
+
 import argparse
 import asyncio
 import json
@@ -106,6 +140,7 @@ def extract_toc_nodes_from_txt(txt_content: str) -> list:
             "parents": parent_titles,
             "start_page": page,
             "end_page": None,
+            "stop_before_id": None,
             "text_end_before": None,
             "references": [],
         }
@@ -117,6 +152,7 @@ def extract_toc_nodes_from_txt(txt_content: str) -> list:
         next_item = raw_items[idx + 1] if idx + 1 < len(raw_items) else None
         if next_item is not None:
             item["end_page"] = max(item["start_page"], next_item["start_page"])
+            item["stop_before_id"] = next_item["id"]
             item["text_end_before"] = next_item["title"]
             pages_text = (
                 f"{item['start_page']} - {item['end_page']}"
@@ -132,6 +168,7 @@ def extract_toc_nodes_from_txt(txt_content: str) -> list:
             "title": item["title"],
             "parents": item["parents"],
             "pages": pages_text,
+            "stop_before_id": item["stop_before_id"],
             "text_end_before": item["text_end_before"],
             "references": item["references"],
         })
@@ -258,6 +295,7 @@ def build_sorted_sections(sorted_scores: list, original_nodes: dict) -> list[dic
             "confidence": round(float(score), 2),
             "hierarchy": node_info.get("parents", []),
             "pages": node_info["pages"],
+            "stop_before_id": node_info.get("stop_before_id"),
             "text_boundary": text_boundary,
         })
     return sections
@@ -318,6 +356,7 @@ async def analyze_peripheral_nodes(
             "title": node["title"],
             "parents": node.get("parents", []),
             "pages": node["pages"],
+            "stop_before_id": node.get("stop_before_id"),
             "text_end_before": node["text_end_before"],
         }
         for node in toc_nodes

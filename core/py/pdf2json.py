@@ -54,6 +54,7 @@ import argparse
 import logging
 import json
 import io
+import re
 import sys
 from pathlib import Path
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
@@ -61,7 +62,14 @@ import pypdfium2 as pdfium
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
-from docling_core.types.doc import ImageRefMode
+from docling.datamodel.pipeline_options import PdfPipelineOptions, HeadingHierarchyOptions
+from docling_core.types.doc import (
+    ImageRefMode,
+    PictureItem,
+    SectionHeaderItem,
+    TableItem,
+    TextItem,
+)
 
 
 class Tee(io.TextIOBase):
@@ -211,6 +219,12 @@ def export_pdf_to_json(
     pipeline_options.generate_picture_images = True
     pipeline_options.images_scale = 2.0  # optional (default ~1.0)
     pipeline_options.do_ocr = not no_ocr
+    pipeline_options.heading_hierarchy_options = HeadingHierarchyOptions(
+        enabled=True,
+        use_bookmarks=True,
+        use_numbering=True,
+        use_style=True,
+    )
 
     converter = DocumentConverter(
         format_options={
@@ -234,7 +248,107 @@ def export_pdf_to_json(
         json_path,
         image_mode=ImageRefMode.REFERENCED,
     )
+
+    build_and_save_toc(doc, output_dir)
+
     return json_path
+
+
+def build_and_save_toc(doc, output_dir: Path) -> None:
+    """Build indented TOC (toc_ai.txt) and ID-based index (sections_by_id.json) using Docling's HeadingHierarchy."""
+    # Patterns for non-section elements sometimes misclassified by layout detection
+    bullet_pattern = re.compile(r"^[\u00b7\u2022\-\*\•\·]\s+")
+    noise_heading_pattern = re.compile(r"^(?:Where:|Table\s+\d+\.|Figure\s+\d+\.|Equation\s+\d+:)\b", re.IGNORECASE)
+
+    def clean_heading_text(raw_title: str) -> str:
+        cleaned = re.sub(r"^[^\w\s\(\)\[\]]+\s*", "", raw_title.strip())
+        return cleaned.strip()
+
+    mapped_sections = {}
+    current_section = None
+    id_counter = 0
+
+    def create_section(title: str, level: int, page: int | str) -> dict:
+        nonlocal id_counter
+        sec_id = f"SEC_{id_counter:04d}"
+        id_counter += 1
+        return {
+            "id": sec_id,
+            "level": level,
+            "title": title,
+            "page": page,
+            "text": [],
+            "tables_md": [],
+            "images": [],
+        }
+
+    for item, tree_level in doc.iterate_items():
+        page = getattr(item.prov[0], "page_no", "?") if getattr(item, "prov", None) else "?"
+
+        if isinstance(item, SectionHeaderItem):
+            raw_text = item.text.strip()
+
+            # 1. Convert bullet points (e.g. "· Sleep mode") into markdown list items inside current section
+            if bullet_pattern.match(raw_text):
+                if current_section is None:
+                    current_section = create_section("Preamble / Initial Content", 1, page)
+                bullet_label = bullet_pattern.sub("", raw_text).strip()
+                current_section["text"].append(f"- **{bullet_label}**")
+                continue
+
+            clean_title = clean_heading_text(raw_text)
+
+            # 2. Convert captions/formulas (e.g. "Where:", "Table 52.", "Equation 1:") into inline bold text
+            if noise_heading_pattern.match(clean_title):
+                if current_section is None:
+                    current_section = create_section("Preamble / Initial Content", 1, page)
+                current_section["text"].append(f"**{clean_title}**")
+                continue
+
+            if current_section is not None:
+                mapped_sections[current_section["id"]] = current_section
+
+            # Read the hierarchical level computed by HeadingHierarchyOptions (stored on item.level)
+            heading_level = max(1, getattr(item, "level", tree_level))
+            current_section = create_section(clean_title, heading_level, page)
+        else:
+            if current_section is None:
+                current_section = create_section("Preamble / Initial Content", 1, page)
+
+            if isinstance(item, TextItem):
+                current_section["text"].append(item.text)
+            elif isinstance(item, TableItem):
+                current_section["tables_md"].append(item.export_to_markdown(doc))
+            elif isinstance(item, PictureItem):
+                uri = str(item.image.uri) if (item.image and item.image.uri) else None
+                current_section["images"].append({
+                    "uri": uri,
+                    "caption": item.caption_text(doc),
+                })
+
+    if current_section is not None:
+        mapped_sections[current_section["id"]] = current_section
+
+    toc_lines = []
+    for sec_id, data in mapped_sections.items():
+        indentation = "  " * max(0, data["level"] - 1)
+        n_tab = len(data["tables_md"])
+        n_img = len(data["images"])
+
+        badges = []
+        if n_tab > 0:
+            badges.append(f"T:{n_tab}")
+        if n_img > 0:
+            badges.append(f"I:{n_img}")
+        badge_str = f" [{' '.join(badges)}]" if badges else ""
+
+        toc_lines.append(
+            f"{indentation}[{sec_id}] {data['title']} (Page {data['page']}){badge_str}"
+        )
+
+    (output_dir / "toc_ai.txt").write_text("\n".join(toc_lines), encoding="utf-8")
+    with open(output_dir / "sections_by_id.json", "w", encoding="utf-8") as f:
+        json.dump(mapped_sections, f, ensure_ascii=False, indent=2)
 
 
 def parse_args() -> argparse.Namespace:
@@ -305,6 +419,8 @@ def main() -> int:
 
     scope = f"pages {page_range[0]}-{page_range[1]} of {total_pages}" if page_range else f"all {total_pages} pages"
     print()
+    print(f"Table Of Contents (TOC) exported to: {output_dir / 'toc_ai.txt'}")
+    print(f"Sections by ID exported to: {output_dir / 'sections_by_id.json'}")
     print(f"JSON exported SUCCESSFULLY ({scope}): {out_file}")
     print()
     return 0

@@ -465,8 +465,8 @@ def main() -> int:
 
     scope = f"pages {page_range[0]}-{page_range[1]} of {total_pages}" if page_range else f"all {total_pages} pages"
     print()
-    print(f"Table Of Contents (TOC) exported to: {output_dir / 'toc_ai.txt'}")
-    print(f"Sections by ID exported to: {output_dir / 'sections_by_id.json'}")
+    print(f"Table Of Contents (TOC) exported to: {output_dir / 'toc.txt'}")
+    print(f"Enriched TOC exported to: {output_dir / 'toc_enriched.json'}")
     print(f"JSON exported SUCCESSFULLY ({scope}): {out_file}")
     print()
     return 0

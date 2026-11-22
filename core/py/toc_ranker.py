@@ -28,20 +28,71 @@ Dependencies:
   - Third-party (for LLM_PROVIDER="copilot"): pyyaml (yaml), copilot (CopilotClient)
 
 Outputs (saved in the same directory as the resolved TXT output):
-  1. <output_file.txt>     : Flattened lines "[<id>] <title> — confidence: <0.00-1.00>"
-  2. peripheral_nodes.json : List of objects with fields:
-                             id, title, confidence, hierarchy, pages,
-                             stop_before_id, text_boundary
+  1. toc_ranked.txt           : Flattened lines "[<id>] <title> — confidence: <0.00-1.00>"
+  2. toc_ranked_enriched.json : List of objects with fields:
+                                id, title, confidence, hierarchy, pages,
+                                stop_before_id, text_boundary
+  3. <script_stem>_report.txt : Console output log (overwritten at every run)
 """
 
 import argparse
 import asyncio
 import json
+import io
 import os
 import re
 import sys
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, contextmanager
+from pathlib import Path
 import yaml
+
+
+class Tee(io.TextIOBase):
+    def __init__(self, console_stream, file_stream):
+        self.console_stream = console_stream
+        self.file_stream = file_stream
+
+    @property
+    def encoding(self):
+        return getattr(self.console_stream, "encoding", "utf-8")
+
+    def isatty(self) -> bool:
+        return bool(
+            hasattr(self.console_stream, "isatty")
+            and self.console_stream.isatty()
+        )
+
+    def write(self, s: str) -> int:
+        if not s:
+            return 0
+        self.console_stream.write(s)
+        self.console_stream.flush()
+        if not self.file_stream.closed:
+            self.file_stream.write(s)
+            self.file_stream.flush()
+        return len(s)
+
+    def flush(self) -> None:
+        self.console_stream.flush()
+        if not self.file_stream.closed:
+            self.file_stream.flush()
+
+
+@contextmanager
+def tee_output_to_file(report_path: Path):
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    orig_stdout = sys.stdout
+    orig_stderr = sys.stderr
+
+    with report_path.open("w", encoding="utf-8") as report_file:
+        sys.stdout = Tee(orig_stdout, report_file)
+        sys.stderr = Tee(orig_stderr, report_file)
+        try:
+            yield report_path
+        finally:
+            sys.stdout = orig_stdout
+            sys.stderr = orig_stderr
+
 
 # --- 1. MODEL CONFIGURATION ---
 LLM_PROVIDER = "qwen"  # "qwen" per endpoint OpenAI-compatibile/locale, "copilot" per GitHub Copilot
@@ -317,7 +368,7 @@ def print_sorted_sections(sections: list[dict]) -> None:
         print("No sections scored.")
         return
 
-    print("Elenco sezioni ordinato per confidenza decrescente (0.00 - 1.00):")
+    print("Sections sorted by descending confidence (0.00 - 1.00):")
     for idx, line in enumerate(format_flattened_lines(sections), start=1):
         print(f"{idx:2d}. {line}")
 
@@ -432,7 +483,7 @@ async def analyze_peripheral_nodes(
 
     saved_txt_path = save_flattened_sections_as_txt(output_path, sorted_sections)
     output_dir = os.path.dirname(saved_txt_path)
-    json_output_path = os.path.join(output_dir, "peripheral_nodes.json") if output_dir else "peripheral_nodes.json"
+    json_output_path = os.path.join(output_dir, "toc_ranked_enriched.json") if output_dir else "toc_ranked_enriched.json"
     save_sorted_sections_as_json(json_output_path, sorted_sections)
 
     print(f"\nSaved flattened ranked TOC to '{saved_txt_path}'.")
@@ -476,58 +527,65 @@ async def main():
         print(f"Error: --concurrent must be between 1 and {MAX_ALLOWED_CONCURRENT}.")
         sys.exit(1)
 
-    try:
-        system_prompt = load_system_prompt(args.prompt_path)
-        model_name = init_llm_client()
-    except (FileNotFoundError, ValueError) as exc:
-        print(f"Error: {exc}")
-        sys.exit(1)
+    script_stem = Path(__file__).stem
+    out_target = Path(args.output_path).expanduser().resolve()
+    report_dir = out_target if out_target.is_dir() else out_target.parent
+    report_path = report_dir / f"{script_stem}_report.txt"
 
-    if not os.path.isfile(args.toc_path):
-        print(f"Error: TOC file '{args.toc_path}' does not exist.")
-        sys.exit(1)
+    with tee_output_to_file(report_path):
+        try:
+            system_prompt = load_system_prompt(args.prompt_path)
+            model_name = init_llm_client()
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"Error: {exc}")
+            sys.exit(1)
 
-    with open(args.toc_path, "r", encoding="utf-8") as f:
-        txt_content = f.read()
+        if not os.path.isfile(args.toc_path):
+            print(f"Error: TOC file '{args.toc_path}' does not exist.")
+            sys.exit(1)
 
-    toc_nodes = extract_toc_nodes_from_txt(txt_content)
+        with open(args.toc_path, "r", encoding="utf-8") as f:
+            txt_content = f.read()
 
-    if not toc_nodes:
-        print(f"Error: No TOC nodes found in '{args.toc_path}'.")
-        sys.exit(1)
+        toc_nodes = extract_toc_nodes_from_txt(txt_content)
 
-    print(
-        f"Extracted {len(toc_nodes)} nodes from '{args.toc_path}'. "
-        f"Sending one request per node with up to {args.max_concurrent} concurrent workers..."
-    )
-    if LLM_PROVIDER == "copilot":
-        from copilot import CopilotClient
+        if not toc_nodes:
+            print(f"Error: No TOC nodes found in '{args.toc_path}'.")
+            sys.exit(1)
 
-        async with CopilotClient() as copilot_client:
-            async with AsyncExitStack() as session_stack:
-                session_count = min(args.max_concurrent, len(toc_nodes))
-                copilot_sessions = [
-                    await session_stack.enter_async_context(
-                        await copilot_client.create_session(model=model_name)
-                    )
-                    for _ in range(session_count)
-                ]
-                await analyze_peripheral_nodes(
-                    toc_nodes,
-                    system_prompt,
-                    model_name,
-                    output_path=args.output_path,
-                    max_concurrent=args.max_concurrent,
-                    copilot_sessions=copilot_sessions,
-                )
-    else:
-        await analyze_peripheral_nodes(
-            toc_nodes,
-            system_prompt,
-            model_name,
-            output_path=args.output_path,
-            max_concurrent=args.max_concurrent,
+        print(
+            f"Extracted {len(toc_nodes)} nodes from '{args.toc_path}'. "
+            f"Sending one request per node with up to {args.max_concurrent} concurrent workers..."
         )
+        if LLM_PROVIDER == "copilot":
+            from copilot import CopilotClient
+
+            async with CopilotClient() as copilot_client:
+                async with AsyncExitStack() as session_stack:
+                    session_count = min(args.max_concurrent, len(toc_nodes))
+                    copilot_sessions = [
+                        await session_stack.enter_async_context(
+                            await copilot_client.create_session(model=model_name)
+                        )
+                        for _ in range(session_count)
+                    ]
+                    await analyze_peripheral_nodes(
+                        toc_nodes,
+                        system_prompt,
+                        model_name,
+                        output_path=args.output_path,
+                        max_concurrent=args.max_concurrent,
+                        copilot_sessions=copilot_sessions,
+                    )
+        else:
+            await analyze_peripheral_nodes(
+                toc_nodes,
+                system_prompt,
+                model_name,
+                output_path=args.output_path,
+                max_concurrent=args.max_concurrent,
+            )
+
 
 
 if __name__ == "__main__":

@@ -97,13 +97,15 @@ class Tee(io.TextIOBase):
             return 0
         self.console_stream.write(s)
         self.console_stream.flush()
-        self.file_stream.write(s)
-        self.file_stream.flush()
+        if not self.file_stream.closed:
+            self.file_stream.write(s)
+            self.file_stream.flush()
         return len(s)
 
     def flush(self) -> None:
         self.console_stream.flush()
-        self.file_stream.flush()
+        if not self.file_stream.closed:
+            self.file_stream.flush()
 
 
 @contextmanager
@@ -263,7 +265,8 @@ def build_and_save_toc(doc, output_dir: Path) -> None:
     """Build indented TOC (toc.txt) and ID-based index (toc_enriched.json) adhering to Docling's native flow."""
     bullet_pattern = re.compile(r"^[\u00b7\u2022\-\*\•\·]\s+")
     noise_heading_pattern = re.compile(
-        r"^(?:Where:|Table\s+\d+\.|Figure\s+\d+\.|Equation\s+\d+:)\b", re.IGNORECASE
+        r"^(?:Where:|(?:Notes?|Notices?|Caution|Warning|Important)\s*[:：]|(?:Table\s+\d+\.|Figure\s+\d+\.|Equation\s+\d+:)\b)",
+        re.IGNORECASE,
     )
 
     def clean_heading_text(raw_title: str) -> str:

@@ -29,8 +29,10 @@
 # Output (inside --output):
 #   <pdf_stem>.json              full run
 #   <pdf_stem>_p<MIN>-<MAX>.json when --range is used
-#   report.txt                   copy of stdout/stderr and Docling INFO logs
+#   pdf_to_json_report.txt       copy of stdout/stderr and Docling INFO logs
 #                                (overwritten at every run)
+#   toc.txt                      hierarchical Table Of Content (with # of tables, images, footnotes for each section)
+#   toc_enriched.json            hirarchical TOC with body text, footnotes, markdowned tables and image urls for each section
 #   Pictures are exported as referenced image files (ImageRefMode.REFERENCED),
 #   handled by Docling next to the JSON file, and rendered at scale 2.0.
 #
@@ -435,7 +437,8 @@ def main() -> int:
             range_values=args.range,
         )
 
-        report_path = output_dir / "report.txt"
+        script_stem = Path(__file__).stem
+        report_path = output_dir / f"{script_stem}_report.txt"
 
         with tee_output_to_file(report_path):
             print("*** Invoking Docling ***")

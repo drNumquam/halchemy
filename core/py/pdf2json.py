@@ -4,7 +4,7 @@
 # Purpose:
 #   Export a PDF (or a range of its pages) to a complete JSON document using
 #   Docling (layout analysis, tables, optional OCR, picture extraction).
-#   The console output is also mirrored to a report file (report.txt).
+#   The console output is also mirrored to a report file (<script_stem>_report.txt).
 #
 # Syntax:
 #   python pdf_to_json_docling.py --pdf <PDF_FILE> --output <OUTPUT_DIR>
@@ -29,10 +29,11 @@
 # Output (inside --output):
 #   <pdf_stem>.json              full run
 #   <pdf_stem>_p<MIN>-<MAX>.json when --range is used
-#   pdf_to_json_report.txt       copy of stdout/stderr and Docling INFO logs
+#   <script_stem>_report.txt     copy of stdout/stderr and Docling INFO logs
 #                                (overwritten at every run)
-#   toc.txt                      hierarchical Table Of Content (with # of tables, images, footnotes for each section)
-#   toc_enriched.json            hirarchical TOC with body text, footnotes, markdowned tables and image urls for each section
+#   toc.txt                      hierarchical Table Of Contents (with Tbl, Img, Ftn counts per section)
+#   toc_enriched.json            section-indexed JSON with body text (including captions), page-matched
+#                                footnotes, Markdown tables, and image references
 #   Pictures are exported as referenced image files (ImageRefMode.REFERENCED),
 #   handled by Docling next to the JSON file, and rendered at scale 2.0.
 #
@@ -44,9 +45,9 @@
 # Dependencies:
 #   - Python >= 3.10 (uses the "X | None" type-hint syntax)
 #   - docling        (DocumentConverter, PdfPipelineOptions, InputFormat)
-#   - docling-core   (docling_core.types.doc.ImageRefMode; installed with docling)
+#   - docling-core   (docling_core.types.doc; installed with docling)
 #   - pypdfium2      (reads the total page count of the PDF)
-#   - Standard library: argparse, logging, json, io, sys, pathlib, contextlib
+#   - Standard library: argparse, logging, json, io, re, sys, pathlib, contextlib
 #   Installation:
 #       pip install docling pypdfium2
 #   Note: on the first run Docling may download its AI models (network needed).
@@ -259,7 +260,7 @@ def export_pdf_to_json(
 
 
 def build_and_save_toc(doc, output_dir: Path) -> None:
-    """Build indented TOC (toc.txt) and ID-based index (toc_enriched.json) including page footnotes."""
+    """Build indented TOC (toc.txt) and ID-based index (toc_enriched.json) adhering to Docling's native flow."""
     bullet_pattern = re.compile(r"^[\u00b7\u2022\-\*\•\·]\s+")
     noise_heading_pattern = re.compile(
         r"^(?:Where:|Table\s+\d+\.|Figure\s+\d+\.|Equation\s+\d+:)\b", re.IGNORECASE
@@ -269,7 +270,7 @@ def build_and_save_toc(doc, output_dir: Path) -> None:
         cleaned = re.sub(r"^[^\w\s\(\)\[\]]+\s*", "", raw_title.strip())
         return cleaned.strip()
 
-    # 1. Collect all footnotes in a page (avoiding header/footer repetitions)
+    # 1. Collect all footnotes per page (avoiding repetitive page headers/footers)
     footnotes_by_page: dict[int, list[str]] = {}
     for item, _ in doc.iterate_items(
         included_content_layers={ContentLayer.BODY, ContentLayer.FURNITURE}
@@ -308,7 +309,7 @@ def build_and_save_toc(doc, output_dir: Path) -> None:
         if isinstance(page, int):
             section_pages[sec["id"]].add(page)
 
-    # 2. Scansiona il flusso principale (BODY) escludendo le footnote già raccolte sopra
+    # 2. Traverse the main document body (excluding footnotes already collected above)
     for item, tree_level in doc.iterate_items(included_content_layers={ContentLayer.BODY}):
         if getattr(item, "label", None) == DocItemLabel.FOOTNOTE:
             continue
@@ -318,6 +319,7 @@ def build_and_save_toc(doc, output_dir: Path) -> None:
         if isinstance(item, SectionHeaderItem):
             raw_text = item.text.strip()
 
+            # Convert bullet points into markdown list items inside the current section
             if bullet_pattern.match(raw_text):
                 if current_section is None:
                     current_section = create_section("Preamble / Initial Content", 1, page)
@@ -328,6 +330,7 @@ def build_and_save_toc(doc, output_dir: Path) -> None:
 
             clean_title = clean_heading_text(raw_text)
 
+            # Convert inline formulas or unlinked labels into bold text
             if noise_heading_pattern.match(clean_title):
                 if current_section is None:
                     current_section = create_section("Preamble / Initial Content", 1, page)
@@ -352,39 +355,36 @@ def build_and_save_toc(doc, output_dir: Path) -> None:
                 current_section["tables_md"].append(item.export_to_markdown(doc))
             elif isinstance(item, PictureItem):
                 uri = str(item.image.uri) if (item.image and item.image.uri) else None
-                current_section["images"].append({
-                    "uri": uri,
-                    "caption": item.caption_text(doc),
-                })
+                current_section["images"].append({"uri": uri})
 
     if current_section is not None:
         mapped_sections[current_section["id"]] = current_section
 
     # 3. Propagate footnotes to all sections touching their page
-    section_footnotes_count: dict[str, int] = {}  
+    section_footnotes_count: dict[str, int] = {}
     for sec_id, data in mapped_sections.items():
         touched = sorted(section_pages.get(sec_id, set()))
-        ftn_count = 0  
+        ftn_count = 0
         for p in touched:
             for fn in footnotes_by_page.get(p, []):
                 data["text"].append(f"> [Footnote - Page {p}] {fn}")
-                ftn_count += 1  
-        section_footnotes_count[sec_id] = ftn_count  
+                ftn_count += 1
+        section_footnotes_count[sec_id] = ftn_count
 
     toc_lines = []
     for sec_id, data in mapped_sections.items():
         indentation = "  " * max(0, data["level"] - 1)
         n_tab = len(data["tables_md"])
         n_img = len(data["images"])
-        n_ftn = section_footnotes_count.get(sec_id, 0)  
+        n_ftn = section_footnotes_count.get(sec_id, 0)
 
         badges = []
         if n_tab > 0:
-            badges.append(f"Tbl:{n_tab}")  
+            badges.append(f"Tbl:{n_tab}")
         if n_img > 0:
-            badges.append(f"Img:{n_img}")  
-        if n_ftn > 0:                      
-            badges.append(f"Ftn:{n_ftn}")  
+            badges.append(f"Img:{n_img}")
+        if n_ftn > 0:
+            badges.append(f"Ftn:{n_ftn}")
         badge_str = f" [{' '.join(badges)}]" if badges else ""
 
         toc_lines.append(
@@ -394,7 +394,6 @@ def build_and_save_toc(doc, output_dir: Path) -> None:
     (output_dir / "toc.txt").write_text("\n".join(toc_lines), encoding="utf-8")
     with open(output_dir / "toc_enriched.json", "w", encoding="utf-8") as f:
         json.dump(mapped_sections, f, ensure_ascii=False, indent=2)
-
 
 
 def parse_args() -> argparse.Namespace:

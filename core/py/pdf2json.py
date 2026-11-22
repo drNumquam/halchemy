@@ -64,6 +64,8 @@ from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.pipeline_options import PdfPipelineOptions, HeadingHierarchyOptions
 from docling_core.types.doc import (
+    ContentLayer,
+    DocItemLabel,
     ImageRefMode,
     PictureItem,
     SectionHeaderItem,
@@ -255,16 +257,31 @@ def export_pdf_to_json(
 
 
 def build_and_save_toc(doc, output_dir: Path) -> None:
-    """Build indented TOC (toc_ai.txt) and ID-based index (sections_by_id.json) using Docling's HeadingHierarchy."""
-    # Patterns for non-section elements sometimes misclassified by layout detection
+    """Build indented TOC (toc.txt) and ID-based index (toc_enriched.json) including page footnotes."""
     bullet_pattern = re.compile(r"^[\u00b7\u2022\-\*\•\·]\s+")
-    noise_heading_pattern = re.compile(r"^(?:Where:|Table\s+\d+\.|Figure\s+\d+\.|Equation\s+\d+:)\b", re.IGNORECASE)
+    noise_heading_pattern = re.compile(
+        r"^(?:Where:|Table\s+\d+\.|Figure\s+\d+\.|Equation\s+\d+:)\b", re.IGNORECASE
+    )
 
     def clean_heading_text(raw_title: str) -> str:
         cleaned = re.sub(r"^[^\w\s\(\)\[\]]+\s*", "", raw_title.strip())
         return cleaned.strip()
 
+    # 1. Collect all footnotes in a page (avoiding header/footer repetitions)
+    footnotes_by_page: dict[int, list[str]] = {}
+    for item, _ in doc.iterate_items(
+        included_content_layers={ContentLayer.BODY, ContentLayer.FURNITURE}
+    ):
+        if getattr(item, "label", None) == DocItemLabel.FOOTNOTE and hasattr(item, "text"):
+            page_no = getattr(item.prov[0], "page_no", None) if getattr(item, "prov", None) else None
+            fn_text = item.text.strip()
+            if page_no is not None and fn_text:
+                footnotes_by_page.setdefault(page_no, [])
+                if fn_text not in footnotes_by_page[page_no]:
+                    footnotes_by_page[page_no].append(fn_text)
+
     mapped_sections = {}
+    section_pages: dict[str, set[int]] = {}
     current_section = None
     id_counter = 0
 
@@ -272,6 +289,9 @@ def build_and_save_toc(doc, output_dir: Path) -> None:
         nonlocal id_counter
         sec_id = f"SEC_{id_counter:04d}"
         id_counter += 1
+        section_pages[sec_id] = set()
+        if isinstance(page, int):
+            section_pages[sec_id].add(page)
         return {
             "id": sec_id,
             "level": level,
@@ -282,38 +302,47 @@ def build_and_save_toc(doc, output_dir: Path) -> None:
             "images": [],
         }
 
-    for item, tree_level in doc.iterate_items():
+    def track_page(sec: dict, page: int | str) -> None:
+        if isinstance(page, int):
+            section_pages[sec["id"]].add(page)
+
+    # 2. Scansiona il flusso principale (BODY) escludendo le footnote già raccolte sopra
+    for item, tree_level in doc.iterate_items(included_content_layers={ContentLayer.BODY}):
+        if getattr(item, "label", None) == DocItemLabel.FOOTNOTE:
+            continue
+
         page = getattr(item.prov[0], "page_no", "?") if getattr(item, "prov", None) else "?"
 
         if isinstance(item, SectionHeaderItem):
             raw_text = item.text.strip()
 
-            # 1. Convert bullet points (e.g. "· Sleep mode") into markdown list items inside current section
             if bullet_pattern.match(raw_text):
                 if current_section is None:
                     current_section = create_section("Preamble / Initial Content", 1, page)
+                track_page(current_section, page)
                 bullet_label = bullet_pattern.sub("", raw_text).strip()
                 current_section["text"].append(f"- **{bullet_label}**")
                 continue
 
             clean_title = clean_heading_text(raw_text)
 
-            # 2. Convert captions/formulas (e.g. "Where:", "Table 52.", "Equation 1:") into inline bold text
             if noise_heading_pattern.match(clean_title):
                 if current_section is None:
                     current_section = create_section("Preamble / Initial Content", 1, page)
+                track_page(current_section, page)
                 current_section["text"].append(f"**{clean_title}**")
                 continue
 
             if current_section is not None:
                 mapped_sections[current_section["id"]] = current_section
 
-            # Read the hierarchical level computed by HeadingHierarchyOptions (stored on item.level)
             heading_level = max(1, getattr(item, "level", tree_level))
             current_section = create_section(clean_title, heading_level, page)
         else:
             if current_section is None:
                 current_section = create_section("Preamble / Initial Content", 1, page)
+
+            track_page(current_section, page)
 
             if isinstance(item, TextItem):
                 current_section["text"].append(item.text)
@@ -329,26 +358,41 @@ def build_and_save_toc(doc, output_dir: Path) -> None:
     if current_section is not None:
         mapped_sections[current_section["id"]] = current_section
 
+    # 3. Propagate footnotes to all sections touching their page
+    section_footnotes_count: dict[str, int] = {}  
+    for sec_id, data in mapped_sections.items():
+        touched = sorted(section_pages.get(sec_id, set()))
+        ftn_count = 0  
+        for p in touched:
+            for fn in footnotes_by_page.get(p, []):
+                data["text"].append(f"> [Footnote - Page {p}] {fn}")
+                ftn_count += 1  
+        section_footnotes_count[sec_id] = ftn_count  
+
     toc_lines = []
     for sec_id, data in mapped_sections.items():
         indentation = "  " * max(0, data["level"] - 1)
         n_tab = len(data["tables_md"])
         n_img = len(data["images"])
+        n_ftn = section_footnotes_count.get(sec_id, 0)  
 
         badges = []
         if n_tab > 0:
-            badges.append(f"T:{n_tab}")
+            badges.append(f"Tbl:{n_tab}")  
         if n_img > 0:
-            badges.append(f"I:{n_img}")
+            badges.append(f"Img:{n_img}")  
+        if n_ftn > 0:                      
+            badges.append(f"Ftn:{n_ftn}")  
         badge_str = f" [{' '.join(badges)}]" if badges else ""
 
         toc_lines.append(
             f"{indentation}[{sec_id}] {data['title']} (Page {data['page']}){badge_str}"
         )
 
-    (output_dir / "toc_ai.txt").write_text("\n".join(toc_lines), encoding="utf-8")
-    with open(output_dir / "sections_by_id.json", "w", encoding="utf-8") as f:
+    (output_dir / "toc.txt").write_text("\n".join(toc_lines), encoding="utf-8")
+    with open(output_dir / "toc_enriched.json", "w", encoding="utf-8") as f:
         json.dump(mapped_sections, f, ensure_ascii=False, indent=2)
+
 
 
 def parse_args() -> argparse.Namespace:

@@ -8,15 +8,17 @@ Purpose: Parse a hierarchical Table of Contents (TOC) from a TXT file, score eac
          file in the same target directory.
 
 CLI Syntax:
-  python toc_ranker.py --txt <path_to_toc.txt> [--prompt <path_to_prompt.txt>] [--output <path_to_output.txt>]
+  python toc_ranker.py --toc <path_to_toc.txt> [--prompt <path_to_prompt.txt>] [--output <path_to_output.txt>] [--concurrent <1-4>]
 
 Arguments:
-  --txt     (Required) Path to the input TXT file containing TOC lines.
-  --prompt  (Optional) Path to the system prompt text file (default: prompt.txt).
-  --output  (Optional) Path to the output ranked text file, or an existing
-            directory (default: toc_ranked.txt).
+  --toc        (Required) Path to the input TXT file containing TOC lines.
+  --prompt     (Optional) Path to the system prompt text file (default: prompt.txt).
+  --output     (Optional) Path to the output ranked text file, or an existing
+               directory (default: toc_ranked.txt).
+  --concurrent (Optional) Maximum number of concurrent LLM requests, integer from
+               1 to 4 (default: 1).
 
-Input Format (--txt):
+Input Format (--toc):
   Lines matching: <indent>[<ID>] <Title> (Page <N>) [<optional_tags>...]
   Example:        [SEC_0004] 4. Peripherals (Page 15)
 
@@ -50,7 +52,8 @@ DEFAULT_PROMPT_FILE = "prompt.txt"
 DEFAULT_OUTPUT_FILE = "toc_ranked.txt"
 
 COPILOT_MODEL_NAME = "auto"
-MAX_CONCURRENT_REQUESTS = 2
+DEFAULT_MAX_CONCURRENT = 1
+MAX_ALLOWED_CONCURRENT = 4
 
 client = None
 
@@ -86,7 +89,7 @@ def init_llm_client():
 
 # --- 2. EXTRACT HIERARCHICAL NODES FROM TXT ---
 LINE_PATTERN = re.compile(
-    r"^(?P<indent>\s*)\[(?P<id>[A-Za-z0-9_-]+)\]\s+(?P<body>.+?)\s+\(Page\s+(?P<page>\d+)\)(?:\s+(?P<tags>\[[^\]]+\](?:\s+\[[^\]]+\])*))?\s*$"
+    r"^(?P<indent>\s*)\[(?P<id>[A-Za-z0-9_-]+)\]\s+(?P<body>.+?)\s+\(Page\s+(?P<page>\d+|\?)\)(?:\s+(?P<tags>\[[^\]]+\](?:\s+\[[^\]]+\])*))?\s*$"
 )
 NUM_PREFIX_PATTERN = re.compile(
     r"^(?P<num>(?:Appendix\s+[A-Z]\.?|\d+(?:\.\d+)*\.?|[A-Z]\.\d+(?:\.\d+)*\.?))\s+(?P<rest>.+)$"
@@ -119,7 +122,8 @@ def extract_toc_nodes_from_txt(txt_content: str) -> list:
 
         node_id = match.group("id").strip()
         body = match.group("body").strip()
-        page = int(match.group("page"))
+        raw_page = match.group("page")
+        page = int(raw_page) if raw_page.isdigit() else 0
         indent_len = len(match.group("indent").expandtabs(2))
 
         num_match = NUM_PREFIX_PATTERN.match(body)
@@ -349,6 +353,7 @@ async def analyze_peripheral_nodes(
     system_prompt: str,
     model_name: str,
     output_path: str = DEFAULT_OUTPUT_FILE,
+    max_concurrent: int = DEFAULT_MAX_CONCURRENT,
     copilot_sessions=None,
 ) -> list[dict]:
     original_nodes = {
@@ -367,7 +372,7 @@ async def analyze_peripheral_nodes(
         if not nodes:
             return {}
 
-        worker_count = min(MAX_CONCURRENT_REQUESTS, len(nodes))
+        worker_count = min(max_concurrent, len(nodes))
         worker_scores = {}
 
         async def worker(worker_number: int) -> None:
@@ -441,8 +446,8 @@ async def main():
         description="Classify TOC nodes from a TXT file and sort them descending by confidence."
     )
     parser.add_argument(
-        "--txt",
-        dest="txt_path",
+        "--toc",
+        dest="toc_path",
         required=True,
         help="Path to the TXT file containing a hierarchical table of contents",
     )
@@ -458,7 +463,18 @@ async def main():
         default=DEFAULT_OUTPUT_FILE,
         help="Path to the output text file (default: toc_ranked.txt)",
     )
+    parser.add_argument(
+        "--concurrent",
+        dest="max_concurrent",
+        type=int,
+        default=DEFAULT_MAX_CONCURRENT,
+        help=f"Maximum number of concurrent LLM requests (1-{MAX_ALLOWED_CONCURRENT}, default: {DEFAULT_MAX_CONCURRENT})",
+    )
     args = parser.parse_args()
+
+    if not (1 <= args.max_concurrent <= MAX_ALLOWED_CONCURRENT):
+        print(f"Error: --concurrent must be between 1 and {MAX_ALLOWED_CONCURRENT}.")
+        sys.exit(1)
 
     try:
         system_prompt = load_system_prompt(args.prompt_path)
@@ -467,29 +483,29 @@ async def main():
         print(f"Error: {exc}")
         sys.exit(1)
 
-    if not os.path.isfile(args.txt_path):
-        print(f"Error: TXT file '{args.txt_path}' does not exist.")
+    if not os.path.isfile(args.toc_path):
+        print(f"Error: TOC file '{args.toc_path}' does not exist.")
         sys.exit(1)
 
-    with open(args.txt_path, "r", encoding="utf-8") as f:
+    with open(args.toc_path, "r", encoding="utf-8") as f:
         txt_content = f.read()
 
     toc_nodes = extract_toc_nodes_from_txt(txt_content)
 
     if not toc_nodes:
-        print(f"Error: No TOC nodes found in '{args.txt_path}'.")
+        print(f"Error: No TOC nodes found in '{args.toc_path}'.")
         sys.exit(1)
 
     print(
-        f"Extracted {len(toc_nodes)} nodes from '{args.txt_path}'. "
-        f"Sending one request per node with up to {MAX_CONCURRENT_REQUESTS} concurrent workers..."
+        f"Extracted {len(toc_nodes)} nodes from '{args.toc_path}'. "
+        f"Sending one request per node with up to {args.max_concurrent} concurrent workers..."
     )
     if LLM_PROVIDER == "copilot":
         from copilot import CopilotClient
 
         async with CopilotClient() as copilot_client:
             async with AsyncExitStack() as session_stack:
-                session_count = min(MAX_CONCURRENT_REQUESTS, len(toc_nodes))
+                session_count = min(args.max_concurrent, len(toc_nodes))
                 copilot_sessions = [
                     await session_stack.enter_async_context(
                         await copilot_client.create_session(model=model_name)
@@ -501,6 +517,7 @@ async def main():
                     system_prompt,
                     model_name,
                     output_path=args.output_path,
+                    max_concurrent=args.max_concurrent,
                     copilot_sessions=copilot_sessions,
                 )
     else:
@@ -509,6 +526,7 @@ async def main():
             system_prompt,
             model_name,
             output_path=args.output_path,
+            max_concurrent=args.max_concurrent,
         )
 
 

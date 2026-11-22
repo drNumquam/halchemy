@@ -16,3 +16,12 @@ OUTPUT RULES:
 - Return exactly one data row for the provided node; preserve its exact ID and title.
 - Confidence MUST be a number between 0.00 and 1.00.
 - No introductory or concluding text.
+
+CALIBRATION EXAMPLES:
+- Node: 4.1. General Purpose Input/Output Interface (GPIO) -> 0.98
+- Node: 4.3.2. HSPI (Master/Slave) -> 0.99
+- Node: 2. Pin Definitions -> 0.55
+- Node: 3.1.1. CPU -> 0.15
+- Node: 3.3. Radio / 3.4. Wi-Fi -> 0.05
+- Node: 5.1. Electrical Characteristics -> 0.25
+- Node: Appendix A. Pin List / Table of Contents -> 0.05

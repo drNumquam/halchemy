@@ -32,8 +32,6 @@
 #   <script_stem>_report.txt     copy of stdout/stderr and Docling INFO logs
 #                                (overwritten at every run)
 #   toc.tsv                      hierarchical Table Of Contents (with Tbl, Img, Ftn counts per section)
-#   toc_enriched.json            section-indexed JSON with body text (including captions), page-matched
-#                                footnotes, Markdown tables, and image references
 #   Pictures are exported as referenced image files (ImageRefMode.REFERENCED),
 #   handled by Docling next to the JSON file, and rendered at scale 2.0.
 #
@@ -403,8 +401,8 @@ def build_and_save_toc(doc, output_dir: Path) -> None:
             )
 
     (output_dir / "toc.tsv").write_text("\n".join(toc_lines), encoding="utf-8")
-    with open(output_dir / "toc_enriched.json", "w", encoding="utf-8") as f:
-        json.dump(mapped_sections, f, ensure_ascii=False, indent=2)
+    # with open(output_dir / "toc_enriched.json", "w", encoding="utf-8") as f:
+    #    json.dump(mapped_sections, f, ensure_ascii=False, indent=2)
 
 
 def parse_args() -> argparse.Namespace:
@@ -477,7 +475,7 @@ def main() -> int:
     scope = f"pages {page_range[0]}-{page_range[1]} of {total_pages}" if page_range else f"all {total_pages} pages"
     print()
     print(f"Table Of Contents (TOC) exported to: {output_dir / 'toc.tsv'}")
-    print(f"Enriched TOC exported to: {output_dir / 'toc_enriched.json'}")
+    # print(f"Enriched TOC exported to: {output_dir / 'toc_enriched.json'}")
     print(f"JSON exported SUCCESSFULLY ({scope}): {out_file}")
     print()
     return 0

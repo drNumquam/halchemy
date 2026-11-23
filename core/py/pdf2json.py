@@ -260,7 +260,7 @@ def export_pdf_to_json(
 
 
 def build_and_save_toc(doc, output_dir: Path) -> None:
-    """Build indented TOC (toc.txt) and ID-based index (toc_enriched.json) adhering to Docling's native flow."""
+    """Build hierarchical TOC (toc.tsv) adhering to Docling's native flow."""
     bullet_pattern = re.compile(r"^[\u00b7\u2022\-\*\•\·]\s+")
     noise_heading_pattern = re.compile(
         r"^(?:Where:|(?:Notes?|Notices?|Caution|Warning|Important)\s*[:：]|(?:Table\s+\d+\.|Figure\s+\d+\.|Equation\s+\d+:)\b)",

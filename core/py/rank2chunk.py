@@ -1,7 +1,7 @@
 """
 CONTRACT & SPECIFICATION
 ======================
-Script: rank2chunk.py
+Script: ranks2chunks.py
 Purpose: Filter sections from toc_ranked.txt with confidence >= --confidence_min,
          retrieve their full content from toc_enriched.json, and invoke an AI
          agent to:

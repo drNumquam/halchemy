@@ -31,7 +31,7 @@
 #   <pdf_stem>_p<MIN>-<MAX>.json when --range is used
 #   <script_stem>_report.txt     copy of stdout/stderr and Docling INFO logs
 #                                (overwritten at every run)
-#   toc.txt                      hierarchical Table Of Contents (with Tbl, Img, Ftn counts per section)
+#   toc.tsv                      hierarchical Table Of Contents (with Tbl, Img, Ftn counts per section)
 #   toc_enriched.json            section-indexed JSON with body text (including captions), page-matched
 #                                footnotes, Markdown tables, and image references
 #   Pictures are exported as referenced image files (ImageRefMode.REFERENCED),
@@ -376,7 +376,7 @@ def build_and_save_toc(doc, output_dir: Path) -> None:
 
     toc_lines = []
     for sec_id, data in mapped_sections.items():
-        indentation = "  " * max(0, data["level"] - 1)
+        indentation = "\t" * max(0, data["level"] - 1)
         n_tab = len(data["tables_md"])
         n_img = len(data["images"])
         n_ftn = section_footnotes_count.get(sec_id, 0)
@@ -388,13 +388,21 @@ def build_and_save_toc(doc, output_dir: Path) -> None:
             badges.append(f"Img:{n_img}")
         if n_ftn > 0:
             badges.append(f"Ftn:{n_ftn}")
-        badge_str = f" [{' '.join(badges)}]" if badges else ""
+        badge_str = f"[{' '.join(badges)}]" if badges else ""
 
-        toc_lines.append(
-            f"{indentation}[{sec_id}] {data['title']} (Page {data['page']}){badge_str}"
-        )
+        title_col = f"{indentation}[{sec_id}]\t{data['title']}"
+        page_col = f"(Page {data['page']})"
 
-    (output_dir / "toc.txt").write_text("\n".join(toc_lines), encoding="utf-8")
+        if badge_str:
+            toc_lines.append(
+                f"{title_col}\t{page_col}\t{badge_str}"
+            )
+        else:
+            toc_lines.append(
+                f"{title_col}\t{page_col}"
+            )
+
+    (output_dir / "toc.tsv").write_text("\n".join(toc_lines), encoding="utf-8")
     with open(output_dir / "toc_enriched.json", "w", encoding="utf-8") as f:
         json.dump(mapped_sections, f, ensure_ascii=False, indent=2)
 
@@ -468,7 +476,7 @@ def main() -> int:
 
     scope = f"pages {page_range[0]}-{page_range[1]} of {total_pages}" if page_range else f"all {total_pages} pages"
     print()
-    print(f"Table Of Contents (TOC) exported to: {output_dir / 'toc.txt'}")
+    print(f"Table Of Contents (TOC) exported to: {output_dir / 'toc.tsv'}")
     print(f"Enriched TOC exported to: {output_dir / 'toc_enriched.json'}")
     print(f"JSON exported SUCCESSFULLY ({scope}): {out_file}")
     print()

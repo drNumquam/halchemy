@@ -611,8 +611,8 @@ async def expand_sections(
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
 
-    complete_lines = []
-    for sec_id in ordered_final_ids:
+    rows = []
+    for order_idx, sec_id in enumerate(ordered_final_ids):
         sec_info = sections_map[sec_id]
         ranked_info = ranked_map.get(sec_id)
 
@@ -632,7 +632,10 @@ async def expand_sections(
         else:
             tag = f"[REFERENCED by {', '.join(ref_sources)}]"
 
-        complete_lines.append(f"[{sec_id}]\t{title}\t({pages})\t{conf:.2f}\t{tag}")
+        rows.append((conf, order_idx, f"[{sec_id}]\t{title}\t({pages})\t{conf:.2f}\t{tag}"))
+
+    rows.sort(key=lambda r: (-r[0], r[1]))
+    complete_lines = [r[2] for r in rows]
 
     with open(target_tsv_path, "w", encoding="utf-8") as f:
         f.write("\n".join(complete_lines) + ("\n" if complete_lines else ""))

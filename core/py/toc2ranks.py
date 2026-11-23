@@ -1,7 +1,7 @@
 """
 CONTRACT & SPECIFICATION
 ======================
-Script: toc2rank.py
+Script: toc2ranks.py
 Purpose: Parse a hierarchical Table of Contents (TOC) from a tsv file, score each
          section's relevance (0.00 - 1.00) via an LLM, sort results by descending
          confidence, and export a ranked TSV file.

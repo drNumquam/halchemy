@@ -1,19 +1,18 @@
 """
 CONTRACT & SPECIFICATION
 ======================
-Script: toc_ranker.py
-Purpose: Parse a hierarchical Table of Contents (TOC) from a TXT file, score each
+Script: toc2rank.py
+Purpose: Parse a hierarchical Table of Contents (TOC) from a tsv file, score each
          section's relevance (0.00 - 1.00) via an LLM, sort results by descending
-         confidence, and export a flattened ranked text list plus a JSON metadata
-         file in the same target directory.
+         confidence, and export a ranked TSV file.
 
 CLI Syntax:
-  python toc_ranker.py --toc <path_to_toc.txt> [--prompt <path_to_prompt.txt>] [--output <path_to_output.txt>] [--concurrent <1-4>]
+  python toc_ranker.py --toc <path_to_toc.txt> --prompt <path_to_prompt.txt> --output <path_to_output.txt> [--concurrent <1-4>]
 
 Arguments:
-  --toc        (Required) Path to the input TXT file containing TOC lines.
-  --prompt     (Optional) Path to the system prompt text file (default: prompt.txt).
-  --output     (Optional) Path to the output ranked text file, or an existing
+  --toc        (Required) Path to the input tsv file containing TOC lines.
+  --prompt     (Required) Path to the system prompt text file (default: prompt.txt).
+  --output     (Required) Path to the output ranked text file, or an existing
                directory (default: toc_ranked.txt).
   --concurrent (Optional) Maximum number of concurrent LLM requests, integer from
                1 to 4 (default: 1).
@@ -28,16 +27,12 @@ Dependencies:
   - Third-party (for LLM_PROVIDER="copilot"): pyyaml (yaml), copilot (CopilotClient)
 
 Outputs (saved in the same directory as the resolved TXT output):
-  1. toc_ranked.txt           : Flattened lines "[<id>] <title> — confidence: <0.00-1.00>"
-  2. toc_ranked_enriched.json : List of objects with fields:
-                                id, title, confidence, hierarchy, pages,
-                                stop_before_id, text_boundary
-  3. <script_stem>_report.txt : Console output log (overwritten at every run)
+  1. toc_ranked.tsv           : Flattened lines "[<id>] <title> — confidence: <0.00-1.00>"
+  2. <script_stem>_report.txt : Console output log (overwritten at every run)
 """
 
 import argparse
 import asyncio
-import json
 import io
 import os
 import re
@@ -45,7 +40,6 @@ import sys
 from contextlib import AsyncExitStack, contextmanager
 from pathlib import Path
 import yaml
-
 
 class Tee(io.TextIOBase):
     def __init__(self, console_stream, file_stream):
@@ -100,7 +94,7 @@ LLM_PROVIDER = "qwen"  # "qwen" per endpoint OpenAI-compatibile/locale, "copilot
 QWEN_BASE_URL = "http://localhost:1234/v1"
 QWEN_MODEL_NAME = "qwen/qwen3.5-9b"
 DEFAULT_PROMPT_FILE = "prompt.txt"
-DEFAULT_OUTPUT_FILE = "toc_ranked.txt"
+DEFAULT_OUTPUT_FILE = "toc_ranked.tsv"
 
 COPILOT_MODEL_NAME = "auto"
 DEFAULT_MAX_CONCURRENT = 1
@@ -356,11 +350,18 @@ def build_sorted_sections(sorted_scores: list, original_nodes: dict) -> list[dic
     return sections
 
 
-def format_flattened_lines(sections: list[dict]) -> list[str]:
-    return [
-        f"[{sec['id']}] {sec['title']} — confidence: {sec['confidence']:.2f}"
-        for sec in sections
+def format_tsv_lines(sections: list[dict]) -> list[str]:
+    lines = [
+        "id\ttitle\tconfidence\tpages"
     ]
+    for sec in sections:
+        lines.append(
+            f"{sec['id']}\t"
+            f"{sec['title']}\t"
+            f"{sec['confidence']:.2f}\t"
+            f"{sec['pages']}"
+        )
+    return lines
 
 
 def print_sorted_sections(sections: list[dict]) -> None:
@@ -369,11 +370,11 @@ def print_sorted_sections(sections: list[dict]) -> None:
         return
 
     print("Sections sorted by descending confidence (0.00 - 1.00):")
-    for idx, line in enumerate(format_flattened_lines(sections), start=1):
+    for idx, line in enumerate(format_tsv_lines(sections), start=1):
         print(f"{idx:2d}. {line}")
 
 
-def save_flattened_sections_as_txt(output_path: str, sections: list[dict]) -> str:
+def save_ranked_sections_as_tsv(output_path: str, sections: list[dict]) -> str:
     if os.path.isdir(output_path):
         target_path = os.path.join(output_path, DEFAULT_OUTPUT_FILE)
     else:
@@ -383,7 +384,7 @@ def save_flattened_sections_as_txt(output_path: str, sections: list[dict]) -> st
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
 
-    lines = format_flattened_lines(sections)
+    lines = format_tsv_lines(sections)
     with open(target_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + ("\n" if lines else ""))
     return target_path
@@ -480,37 +481,32 @@ async def analyze_peripheral_nodes(
 
     print(f"\nEvaluated {len(sorted_sections)}/{len(toc_nodes)} sections:\n")
     print_sorted_sections(sorted_sections)
-
-    saved_txt_path = save_flattened_sections_as_txt(output_path, sorted_sections)
-    output_dir = os.path.dirname(saved_txt_path)
-    json_output_path = os.path.join(output_dir, "toc_ranked_enriched.json") if output_dir else "toc_ranked_enriched.json"
-    save_sorted_sections_as_json(json_output_path, sorted_sections)
-
-    print(f"\nSaved flattened ranked TOC to '{saved_txt_path}'.")
-    print(f"Saved JSON results to '{json_output_path}'.")
+    print(f"\nSaved flattened ranked TOC to '{saved_tsv_path}'.")
     return sorted_sections
 
 
 # --- 6. PARAMETER HANDLING ---
 async def main():
     parser = argparse.ArgumentParser(
-        description="Classify TOC nodes from a TXT file and sort them descending by confidence."
+        description="Classify TOC nodes from a tsv file and sort them descending by confidence."
     )
     parser.add_argument(
         "--toc",
         dest="toc_path",
         required=True,
-        help="Path to the TXT file containing a hierarchical table of contents",
+        help="Path to the tsv file containing a hierarchical table of contents",
     )
     parser.add_argument(
         "--prompt",
         dest="prompt_path",
+        required=True,
         default=DEFAULT_PROMPT_FILE,
         help="Path to the prompt.txt file containing the system prompt",
     )
     parser.add_argument(
         "--output",
         dest="output_path",
+        required=True,
         default=DEFAULT_OUTPUT_FILE,
         help="Path to the output text file (default: toc_ranked.txt)",
     )

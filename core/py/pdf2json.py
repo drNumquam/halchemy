@@ -3,12 +3,13 @@
 # =============================================================================
 # Purpose:
 #   Export a PDF (or a range of its pages) to a complete JSON document using
-#   Docling (layout analysis, tables, optional OCR, picture extraction).
-#   The console output is also mirrored to a report file (<script_stem>_report.txt).
+#   Docling (layout analysis, tables, optional OCR, picture extraction) and
+#   generate a hierarchical Table Of Contents (TSV).
+#   The console output is also mirrored to a report file (pdf2toc_report.txt).
 #
 # Syntax:
-#   python pdf_to_json_docling.py --pdf <PDF_FILE> --output <OUTPUT_DIR>
-#                                 [--range MIN MAX] [--no_ocr]
+#   python pdf2toc.py --pdf <PDF_FILE> --output <OUTPUT_DIR>
+#                     [--range MIN MAX] [--no_ocr]
 #
 # Arguments:
 #   --pdf     (required) Path of the input PDF file. Must exist, be a file and
@@ -22,16 +23,17 @@
 #             (not scanned). OCR is enabled by default.
 #
 # Examples:
-#   python pdf_to_json_docling.py --pdf doc.pdf --output out
-#   python pdf_to_json_docling.py --pdf doc.pdf --output out --range 2 6
-#   python pdf_to_json_docling.py --pdf doc.pdf --output out --no_ocr
+#   python pdf2toc.py --pdf doc.pdf --output out
+#   python pdf2toc.py --pdf doc.pdf --output out --range 2 6
+#   python pdf2toc.py --pdf doc.pdf --output out --no_ocr
 #
 # Output (inside --output):
 #   <pdf_stem>.json              full run
 #   <pdf_stem>_p<MIN>-<MAX>.json when --range is used
 #   <script_stem>_report.txt     copy of stdout/stderr and Docling INFO logs
 #                                (overwritten at every run)
-#   toc.tsv                      hierarchical Table Of Contents (with Tbl, Img, Ftn counts per section)
+#   toc.tsv                      hierarchical Table Of Contents (full run)
+#   toc_p<MIN>-<MAX>.tsv         hierarchical Table Of Contents (when --range is used)
 #   Pictures are exported as referenced image files (ImageRefMode.REFERENCED),
 #   handled by Docling next to the JSON file, and rendered at scale 2.0.
 #
@@ -45,25 +47,24 @@
 #   - docling        (DocumentConverter, PdfPipelineOptions, InputFormat)
 #   - docling-core   (docling_core.types.doc; installed with docling)
 #   - pypdfium2      (reads the total page count of the PDF)
-#   - Standard library: argparse, logging, json, io, re, sys, pathlib, contextlib
+#   - Standard library: argparse, logging, io, re, sys, pathlib, contextlib
 #   Installation:
 #       pip install docling pypdfium2
 #   Note: on the first run Docling may download its AI models (network needed).
 # =============================================================================
 
 import argparse
-import logging
-import json
 import io
+import logging
 import re
 import sys
+from contextlib import contextmanager
 from pathlib import Path
-from contextlib import contextmanager, redirect_stderr, redirect_stdout
+
 import pypdfium2 as pdfium
 from docling.datamodel.base_models import InputFormat
-from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.datamodel.pipeline_options import HeadingHierarchyOptions, PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
-from docling.datamodel.pipeline_options import PdfPipelineOptions, HeadingHierarchyOptions
 from docling_core.types.doc import (
     ContentLayer,
     DocItemLabel,
@@ -216,10 +217,9 @@ def export_pdf_to_json(
     pdf_path: Path,
     output_dir: Path,
     page_range: tuple[int, int] | None,
-    no_ocr: bool = False
-) -> Path:
-    """Convert the PDF (or the given range) with Docling and save the all-inclusive JSON."""
-#    converter = DocumentConverter()
+    no_ocr: bool = False,
+) -> tuple[Path, Path]:
+    """Convert the PDF (or the given range) with Docling and save the JSON and TOC."""
     pipeline_options = PdfPipelineOptions()
     pipeline_options.generate_picture_images = True
     pipeline_options.images_scale = 2.0  # optional (default ~1.0)
@@ -235,15 +235,18 @@ def export_pdf_to_json(
         format_options={
             InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
         },
-        show_progress=True
+        show_progress=True,
     )
 
     if page_range is not None:
+        range_suffix = f"_p{page_range[0]}-{page_range[1]}"
         conv_result = converter.convert(source=str(pdf_path), page_range=page_range)
-        output_filename = f"{pdf_path.stem}_p{page_range[0]}-{page_range[1]}.json"
     else:
+        range_suffix = ""
         conv_result = converter.convert(source=str(pdf_path))
-        output_filename = f"{pdf_path.stem}.json"
+
+    output_filename = f"{pdf_path.stem}{range_suffix}.json"
+    toc_filename = f"toc{range_suffix}.tsv"
 
     doc = conv_result.document
     json_path = output_dir / output_filename
@@ -254,16 +257,16 @@ def export_pdf_to_json(
         image_mode=ImageRefMode.REFERENCED,
     )
 
-    build_and_save_toc(doc, output_dir)
+    toc_path = build_and_save_toc(doc, output_dir, toc_filename=toc_filename)
 
-    return json_path
+    return json_path, toc_path
 
 
-def build_and_save_toc(doc, output_dir: Path) -> None:
-    """Build hierarchical TOC (toc.tsv) adhering to Docling's native flow."""
-    bullet_pattern = re.compile(r"^[\u00b7\u2022\-\*\•\·]\s+")
+def build_and_save_toc(doc, output_dir: Path, toc_filename: str = "toc.tsv") -> Path:
+    """Build hierarchical TOC adhering to Docling's native flow."""
+    bullet_pattern = re.compile(r"^[·•\-\*\•\·]\s+")
     noise_heading_pattern = re.compile(
-        r"^(?:Where:|(?:Notes?|Notices?|Caution|Warning|Important)\s*[:：]|(?:Table\s+\d+\.|Figure\s+\d+\.|Equation\s+\d+:)\b)",
+        r"^(?:Where:|(?:Notes?|Notices?|Caution|Warning|Important)\s*[:：]|(?:Table\s+\d+\.|Figure\s+\d+\.|Equation\s+\d+:))",
         re.IGNORECASE,
     )
 
@@ -326,7 +329,8 @@ def build_and_save_toc(doc, output_dir: Path) -> None:
                     current_section = create_section("Preamble / Initial Content", 1, page)
                 track_page(current_section, page)
                 bullet_label = bullet_pattern.sub("", raw_text).strip()
-                current_section["text"].append(f"- **{bullet_label}**")
+                if bullet_label:
+                    current_section["text"].append(f"- **{bullet_label}**")
                 continue
 
             clean_title = clean_heading_text(raw_text)
@@ -342,7 +346,8 @@ def build_and_save_toc(doc, output_dir: Path) -> None:
             if current_section is not None:
                 mapped_sections[current_section["id"]] = current_section
 
-            heading_level = max(1, getattr(item, "level", tree_level))
+            raw_level = getattr(item, "level", None)
+            heading_level = max(1, raw_level if raw_level is not None else tree_level)
             current_section = create_section(clean_title, heading_level, page)
         else:
             if current_section is None:
@@ -374,7 +379,7 @@ def build_and_save_toc(doc, output_dir: Path) -> None:
 
     toc_lines = []
     for sec_id, data in mapped_sections.items():
-        indentation = "\t" * max(0, data["level"] - 1)
+        indentation = "	" * max(0, data["level"] - 1)
         n_tab = len(data["tables_md"])
         n_img = len(data["images"])
         n_ftn = section_footnotes_count.get(sec_id, 0)
@@ -388,26 +393,22 @@ def build_and_save_toc(doc, output_dir: Path) -> None:
             badges.append(f"Ftn:{n_ftn}")
         badge_str = f"[{' '.join(badges)}]" if badges else ""
 
-        title_col = f"{indentation}[{sec_id}]\t{data['title']}"
+        title_col = f"{indentation}[{sec_id}]	{data['title']}"
         page_col = f"(Page {data['page']})"
 
         if badge_str:
-            toc_lines.append(
-                f"{title_col}\t{page_col}\t{badge_str}"
-            )
+            toc_lines.append(f"{title_col}	{page_col}	{badge_str}")
         else:
-            toc_lines.append(
-                f"{title_col}\t{page_col}"
-            )
+            toc_lines.append(f"{title_col}	{page_col}")
 
-    (output_dir / "toc.tsv").write_text("\n".join(toc_lines), encoding="utf-8")
-    # with open(output_dir / "toc_enriched.json", "w", encoding="utf-8") as f:
-    #    json.dump(mapped_sections, f, ensure_ascii=False, indent=2)
+    toc_path = output_dir / toc_filename
+    toc_path.write_text("\n".join(toc_lines), encoding="utf-8")
+    return toc_path
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Export a PDF (or a range of pages) to a complete JSON using Docling."
+        description="Export a PDF (or a range of pages) to a complete JSON and TOC using Docling."
     )
     parser.add_argument(
         "--pdf",
@@ -417,7 +418,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         required=True,
-        help="Destination folder where the resulting JSON file will be saved.",
+        help="Destination folder where the resulting JSON and TOC files will be saved.",
     )
     parser.add_argument(
         "--range",
@@ -432,7 +433,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         default=False,
         help="Disable OCR if the input PDF is entirely native (not scanned).",
-    )   
+    )
     return parser.parse_args()
 
 
@@ -459,11 +460,11 @@ def main() -> int:
                 print("OCR DISABLED")
             print()
 
-            out_file = export_pdf_to_json(
+            out_file, toc_file = export_pdf_to_json(
                 pdf_path=pdf_path,
                 output_dir=output_dir,
                 page_range=page_range,
-                no_ocr=args.no_ocr
+                no_ocr=args.no_ocr,
             )
     except (FileNotFoundError, ValueError) as exc:
         print(f"Validation error: {exc}", file=sys.stderr)
@@ -474,8 +475,7 @@ def main() -> int:
 
     scope = f"pages {page_range[0]}-{page_range[1]} of {total_pages}" if page_range else f"all {total_pages} pages"
     print()
-    print(f"Table Of Contents (TOC) exported to: {output_dir / 'toc.tsv'}")
-    # print(f"Enriched TOC exported to: {output_dir / 'toc_enriched.json'}")
+    print(f"Table Of Contents (TOC) exported to: {toc_file}")
     print(f"JSON exported SUCCESSFULLY ({scope}): {out_file}")
     print()
     return 0

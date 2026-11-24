@@ -100,7 +100,7 @@ def main() -> None:
         print(f"Errore nel parsing del JSON: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    seq_num = 0
+    seq_num = 1
     for text, level, _is_section in extract_section_headers(content):
         if is_note_line(text):
             continue

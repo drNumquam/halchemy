@@ -5,10 +5,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
+# Accetta solo titoli che iniziano con:
+# - "Appendix A" (con o senza punto)
+# - Numeri o lettera+numeri separati da punti (es. "1.", "1", "3.1", "3.5.1.", "B.1")
 SECTION_NAME_PATTERN = re.compile(
     r"^(?:"
-    r"appendix(?=\s|$|:|\)|\]|–|—|-)"
-    r"|[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*(?=\s|$|:|\)|\]|–|—|-)"
+    r"appendix\s+[A-Z0-9]+(?=\s|$|:|\)|\]|–|—|-|\.)"
+    r"|(?:[A-Z]\.\d+|\d+(?:\.\d+)*)\.?(?=\s|$|:|\)|\]|–|—|-)"
     r")",
     re.IGNORECASE,
 )
@@ -61,7 +64,7 @@ def extract_section_headers(data: Any) -> list[tuple[str, Any, bool]]:
             level = data.get("level", "")
             if isinstance(val, str):
                 cleaned = val.lstrip()
-                if cleaned and not is_note_line(cleaned):
+                if cleaned:
                     results.append((cleaned, level, is_valid_section_name(cleaned)))
 
         for value in data.values():
@@ -104,6 +107,10 @@ def main() -> None:
         formatted = format_output_line(text)
         if not formatted or is_note_line(formatted):
             continue
+        # Filtra: stampa solo se rispetta il formato di titolo di sezione
+        if not is_valid_section_name(formatted):
+            continue
+
         indent = get_level_indent(level)
         print(f"[SEC_{seq_num:04d}]\t{indent}{formatted}\t{level}")
         seq_num += 1

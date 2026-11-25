@@ -1,8 +1,10 @@
 import re
 from pathlib import Path
 import argparse
-from typing import Any
 import sys
+import json
+from typing import Any, Dict, List, Optional
+
 
 # Docling related imports.
 from docling.datamodel.base_models import InputFormat
@@ -38,18 +40,8 @@ SECTION_NAME_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# Strip whitespaces at the beginning of the input string.
-def strip_whitespaces_at_beginning(text: str) -> str:
-    return text.lstrip()
-
 # Returns True if the formatted input is a string starting with a valid section identifier.
-def is_valid_section_name(text: Any) -> bool:
-    if not isinstance(text, str):
-        return False
-
-    # Strip whitespaces at the beginning.
-    text = strip_whitespaces_at_beginning(text)
-
+def is_valid_section_name(text: str) -> bool:
     return SECTION_NAME_PATTERN.match(text) is not None
 
 
@@ -217,7 +209,118 @@ def validate_inputs(
 '''
 TOC
 '''
-def build_json_and_toc()
+import json
+from typing import Any, Dict, List, Optional, Tuple
+from docling_core.types.doc import (
+    DoclingDocument,
+    DocItemLabel,
+    SectionHeaderItem,
+    TableItem,
+    PictureItem,
+    TextItem,
+    ListItem
+)
+
+def build_json_and_toc(doc: DoclingDocument) -> Tuple[str, str]:
+    sections: List[Dict[str, Any]] = []
+    current_section: Optional[Dict[str, Any]] = None
+    sec_counter = 1
+    
+    # Helper dictionary to track start and end pages for each valid section ID
+    page_ranges: Dict[str, Dict[str, Optional[int]]] = {}
+
+    for item, _level in doc.iterate_items():
+        # Skip page headers and footers (furniture layer)
+        if getattr(item, "content_layer", None) == "furniture":
+            continue
+
+        # Extract the page number of the current item if available
+        item_page = item.prov[0].page_no if getattr(item, "prov", None) else None
+
+        # 1. Handle Section Headers
+        if isinstance(item, SectionHeaderItem) or item.label == DocItemLabel.SECTION_HEADER:
+            title = item.text.strip()
+
+            if is_valid_section_name(title):
+                sec_id = f"SEC_{sec_counter:04d}"
+                current_section = {
+                    "id": sec_id,
+                    "level": getattr(item, "level", 1),
+                    "title": title,
+                    "page": item_page,
+                    "text": [],
+                    "tables_md": [],
+                    "images": [],
+                }
+                sections.append(current_section)
+                page_ranges[sec_id] = {"start": item_page, "end": item_page}
+                sec_counter += 1
+            else:
+                # Invalid header: merge title and update end page of the previous valid section
+                if current_section is not None:
+                    if title:
+                        current_section["text"].append(title)
+                    if item_page is not None:
+                        if page_ranges[current_section["id"]]["start"] is None:
+                            page_ranges[current_section["id"]]["start"] = item_page
+                        page_ranges[current_section["id"]]["end"] = item_page
+            continue
+
+        # Skip any items appearing before the first valid section
+        if current_section is None:
+            continue
+
+        # Update the end page of the active valid section for every merged element
+        if item_page is not None:
+            if page_ranges[current_section["id"]]["start"] is None:
+                page_ranges[current_section["id"]]["start"] = item_page
+            page_ranges[current_section["id"]]["end"] = item_page
+
+        # 2. Handle Tables (convert to Markdown)
+        if isinstance(item, TableItem) or item.label == DocItemLabel.TABLE:
+            md_table = item.export_to_markdown(doc=doc)
+            if md_table:
+                current_section["tables_md"].append(md_table)
+
+        # 3. Handle Images
+        elif isinstance(item, PictureItem) or item.label == DocItemLabel.PICTURE:
+            captions = [
+                cap.resolve(doc).text 
+                for cap in getattr(item, "captions", []) 
+                if hasattr(cap, "resolve")
+            ]
+            current_section["images"].append({
+                "id": item.self_ref,
+                "page": item_page,
+                "captions": captions
+            })
+
+        # 4. Handle Text and List items
+        elif isinstance(item, (TextItem, ListItem)):
+            if item.label == DocItemLabel.CAPTION:
+                continue
+            text_val = item.text.strip()
+            if text_val:
+                current_section["text"].append(text_val)
+
+    # Build the TSV Table of Contents for valid sections only
+    toc_lines: List[str] = []
+    for sec in sections:
+        sec_id = sec["id"]
+        lvl = sec["level"]
+        start_p = page_ranges[sec_id]["start"]
+        end_p = page_ranges[sec_id]["end"]
+        
+        page_span = f"{start_p}-{end_p}" if start_p is not None and end_p is not None else ""
+        # Format: [SEC_XXXX]\tstart-end\tlevel\t<tab repeated 'level' times>title
+        indent = "\t" * lvl
+        toc_lines.append(f"[{sec_id}]\t{page_span}\t{lvl}{indent}{sec['title']}")
+
+    json_output = json.dumps({"sections": sections}, indent=2, ensure_ascii=False)
+    toc_tsv = "\n".join(toc_lines)
+
+    return json_output, toc_tsv
+
 
 
 
@@ -271,9 +374,13 @@ def main() -> int:
             image_mode=ImageRefMode.REFERENCED,
         )
 
-        # CALL JSON & TOC GENERATION HERE .....
+        sections_json_str, toc_tsv_str = build_json_and_toc(doc)
 
-        toc_filename = f"toc{range_suffix}.tsv"
+        sections_json_path = output_dir / f"{output_filename}_sections.json"
+        sections_json_path.write_text(sections_json_str, encoding="utf-8")
+
+        toc_path = output_dir / f"toc{range_suffix}.tsv"
+        toc_path.write_text(toc_tsv_str, encoding="utf-8")
     
     except (FileNotFoundError, ValueError) as exc:
         print(f"Validation error: {exc}", file=sys.stderr)
@@ -283,6 +390,7 @@ def main() -> int:
         return 2
 
     return 0
+
 
 
 '''

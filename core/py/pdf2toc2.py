@@ -30,19 +30,62 @@ import pymupdf as fitz
 '''
 Section headers
 '''
-# Matches section identifiers at the beginning of a heading
-# (e.g. "1", "1.2.3", "A.1", "SEC-01", or "Appendix").
+# Accetta solo titoli che iniziano con:
+# - "Appendix A" (con o senza punto)
+# - Numeri o lettera+numeri separati da punti (es. "1.", "1", "3.1", "3.5.1.", "B.1")
 SECTION_NAME_PATTERN = re.compile(
     r"^(?:"
-    r"appendix(?=\s|$|:|\)|\]|–|—|-)"
-    r"|[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*(?=\s|$|:|\)|\]|–|—|-)"
+    r"appendix\s+[A-Z0-9]+(?=\s|$|:|\)|\]|–|—|-|\.)"
+    r"|(?:[A-Z]\.\d+|\d+(?:\.\d+)*)\.?(?=\s|$|:|\)|\]|–|—|-)"
     r")",
     re.IGNORECASE,
 )
 
+NOTE_PREFIX_PATTERN = re.compile(r"^\s*(?:notes?|notices?)", re.IGNORECASE)
+
+
+def is_note_line(text: str) -> bool:
+    return NOTE_PREFIX_PATTERN.match(text.lstrip()) is not None
+
+
+def starts_with_unicode(text: str) -> bool:
+    stripped = text.lstrip()
+    if not stripped:
+        return False
+    return ord(stripped[0]) > 127
+
+
+def strip_unicode_chars(text: str) -> str:
+    return "".join(ch for ch in text if ord(ch) <= 127)
+
+
+def format_output_line(text: str) -> str:
+    cleaned = text.lstrip()
+    if starts_with_unicode(cleaned):
+        cleaned = strip_unicode_chars(cleaned).lstrip()
+    return cleaned
+
+
+def infer_section_level(title: str, docling_level: int = 1) -> int:
+    clean = title.strip()
+    if clean.lower().startswith("appendix"):
+        return 1
+    match = re.match(r"^(?:[A-Z]\.(\d+(?:\.\d+)*)|(\d+(?:\.\d+)*))", clean, re.IGNORECASE)
+    if match:
+        num_part = match.group(1) or match.group(2)
+        offset = 1 if match.group(1) else 0
+        return len(num_part.split(".")) + offset
+    return docling_level
+
+
 # Returns True if the formatted input is a string starting with a valid section identifier.
 def is_valid_section_name(text: str) -> bool:
-    return SECTION_NAME_PATTERN.match(text) is not None
+    if not isinstance(text, str) or is_note_line(text):
+        return False
+    formatted = format_output_line(text)
+    if not formatted or is_note_line(formatted):
+        return False
+    return SECTION_NAME_PATTERN.match(formatted) is not None
 
 
 
@@ -239,13 +282,15 @@ def build_json_and_toc(doc: DoclingDocument) -> Tuple[str, str]:
 
         # 1. Handle Section Headers
         if isinstance(item, SectionHeaderItem) or item.label == DocItemLabel.SECTION_HEADER:
-            title = item.text.strip()
+            raw_title = item.text.strip()
 
-            if is_valid_section_name(title):
+            if is_valid_section_name(raw_title):
+                title = format_output_line(raw_title)
+                lvl = infer_section_level(title, getattr(item, "level", 1))
                 sec_id = f"SEC_{sec_counter:04d}"
                 current_section = {
                     "id": sec_id,
-                    "level": getattr(item, "level", 1),
+                    "level": lvl,
                     "title": title,
                     "page": item_page,
                     "text": [],
@@ -258,8 +303,8 @@ def build_json_and_toc(doc: DoclingDocument) -> Tuple[str, str]:
             else:
                 # Invalid header: merge title and update end page of the previous valid section
                 if current_section is not None:
-                    if title:
-                        current_section["text"].append(title)
+                    if raw_title:
+                        current_section["text"].append(raw_title)
                     if item_page is not None:
                         if page_ranges[current_section["id"]]["start"] is None:
                             page_ranges[current_section["id"]]["start"] = item_page
@@ -310,11 +355,9 @@ def build_json_and_toc(doc: DoclingDocument) -> Tuple[str, str]:
         lvl = sec["level"]
         start_p = page_ranges[sec_id]["start"]
         end_p = page_ranges[sec_id]["end"]
-        
-        page_span = f"{start_p}-{end_p}" if start_p is not None and end_p is not None else ""
-        # Format: [SEC_XXXX]\tstart-end\tlevel\t<tab repeated 'level' times>title
-        indent = "\t" * lvl
-        toc_lines.append(f"[{sec_id}]\t{page_span}\t{lvl}{indent}{sec['title']}")
+        page_span = f"[{start_p:5d}-{end_p:5d}]" if start_p is not None and end_p is not None else "[     -     ]"
+        indent = "\t" * max(0, lvl - 1)
+        toc_lines.append(f"[{sec_id}]\t{page_span}\t{indent}{sec['title']}")
 
     json_output = json.dumps({"sections": sections}, indent=2, ensure_ascii=False)
     toc_tsv = "\n".join(toc_lines)
